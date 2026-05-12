@@ -220,20 +220,10 @@ end
 -- ---------------------------------------------------------------------------
 -- Drill text format (v1) — canonical, human-editable.
 --
--- File shape:
---   # OpenLab drill v1
---   slot:         5
---   events:       9
---   total_frames: 142
+-- Each non-comment event line:
+--     <dir>  <buttons>  <frames>  [meta=NNNN]  [dir_raw=N]
 --
---   # dir  buttons  frames  [annotations]
---     n    2          8   mark=3
---     n    .          2   mark=3
---     n    .         17
---     n    3+4        1
---     ...
---
--- Per-event columns (whitespace-separated):
+-- USER-EDITABLE FIELDS:
 --   dir      Tekken notation: n f b u d  uf df ub db.
 --            Internally, byte 0 low nibble is a 4-bit direction mask:
 --              bit 0 = up   bit 1 = down   bit 2 = forward   bit 3 = back
@@ -241,10 +231,23 @@ end
 --            Invalid combos (e.g. up+down) are preserved via dir_raw=N.
 --   buttons  1=LP 2=RP 3=LK 4=RK, combined with '+'. '.' means no buttons.
 --   frames   duration in frames at 60fps (sum across all events = drill length).
---   annotations (optional, key=value):
---     mark=N      byte 0 high nibble, when not the default 0x2.
---     btn_raw=NN  bits of byte 1 outside the named 1/2/3/4 set (hex).
---     aux=NN      byte 2 (auxiliary state, partially decoded), default 0xA0.
+--
+-- DO-NOT-EDIT METADATA (preserved for round-trip fidelity, default omitted):
+--   meta=MBAA  packed engine state, 4 hex digits:
+--                M  = byte 0 high nibble (input-gate + per-frame char flag).
+--                       bit 0x10 = input pipeline active state.
+--                       bit 0x20 = snapshot of char[+0x3834], restored on
+--                                  playback; affects character internal state.
+--                B  = byte 1 low nibble — extra input-state bits from the
+--                       controller poll (subD vtable). Rare; not yet decoded.
+--                AA = byte 2 — STATE HASH = FUN_141807610(char+0xF0) % 251.
+--                       Game compares this against live state each playback
+--                       frame; mismatch sets recorder_state+0x58 = 0x0101
+--                       (silent desync). Editing this almost always breaks
+--                       playback. TODO(v2): NOP the check or recompute on
+--                       import — requires a native mod, not CE Lua.
+--              Default value is meta=20A0 and is omitted from the file.
+--              Legacy annotations mark=, btn_raw=, aux= still parse on read.
 --
 -- '#' starts a comment to end-of-line. Blank lines are ignored. The header
 -- (slot:, events:, total_frames:) is informational — only the event lines
@@ -308,9 +311,11 @@ local function encode_event_line(b0, b1, b2, b3)
         ann[#ann + 1] = string.format("dir_raw=%X", dir)
     end
     local btn_str, btn_unknown = encode_buttons(b1)
-    if mark ~= DEFAULT_MARK then ann[#ann + 1] = string.format("mark=%X",     mark)        end
-    if btn_unknown ~= 0       then ann[#ann + 1] = string.format("btn_raw=%02X", btn_unknown) end
-    if b2 ~= DEFAULT_AUX      then ann[#ann + 1] = string.format("aux=%02X",   b2)          end
+    -- Pack the three engine-state fields into a single hex token. Omit when
+    -- everything's at the default — keeps clean drills clean.
+    if mark ~= DEFAULT_MARK or btn_unknown ~= 0 or b2 ~= DEFAULT_AUX then
+        ann[#ann + 1] = string.format("meta=%X%X%02X", mark, btn_unknown, b2)
+    end
     local line = string.format("  %-2s   %-5s  %4d", dir_text, btn_str, b3)
     if #ann > 0 then line = line .. "   " .. table.concat(ann, " ") end
     return line
@@ -327,8 +332,23 @@ local function encode_drill_text(bytes, slot_idx)
         string.format("slot:         %d", slot_idx + 1),
         string.format("events:       %d", event_count),
         string.format("total_frames: %d", total),
-        "",
-        "# dir   buttons  frames   [mark=N | btn_raw=NN | aux=NN | dir_raw=N]",
+        "#",
+        "# === Editing this drill ===",
+        "# Each event below is one input transition in the recording.",
+        "# Format:   <dir>  <buttons>  <frames>  [meta=NNNN]",
+        "#",
+        "# Editable fields — change these to dial in the drill:",
+        "#   dir       Tekken notation: n f b u d, uf df ub db",
+        "#   buttons   1 2 3 4 (LP RP LK RK), combined with + (e.g. 1+2), or . for none",
+        "#   frames    duration in frames (60 frames = 1 second @ 60fps)",
+        "#",
+        "# meta=NNNN  recorder metadata — DO NOT EDIT. It encodes engine state",
+        "#            (input gate, raw input flags, per-frame sync hash). The game",
+        "#            checks the sync hash against live state during playback;",
+        "#            mismatched meta causes silent playback desync. The default",
+        "#            value (meta=20A0) is omitted from this file.",
+        "#",
+        "# === Events ===",
     }
     for i = 0, event_count - 1 do
         local off = 3 + i * 4
@@ -354,7 +374,14 @@ local function parse_event_line(stripped)
     for k, v in (rest or ""):gmatch("([%w_]+)%s*=%s*(%w+)") do
         local n = tonumber(v, 16)
         if not n then return nil, "bad annotation value: " .. k .. "=" .. v end
-        if     k == "mark"    then mark    = n
+        if k == "meta" then
+            -- Packed MBAA: M=mark nibble, B=btn_raw nibble, AA=aux byte.
+            local padded = string.format("%04X", n)
+            if #padded ~= 4 then return nil, "meta out of range: " .. v end
+            mark    = tonumber(padded:sub(1, 1), 16)
+            btn_raw = tonumber(padded:sub(2, 2), 16)
+            aux     = tonumber(padded:sub(3, 4), 16)
+        elseif k == "mark"    then mark    = n
         elseif k == "btn_raw" then btn_raw = n
         elseif k == "aux"     then aux     = n
         elseif k == "dir_raw" then dir_raw = n

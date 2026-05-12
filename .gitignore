@@ -1,6 +1,46 @@
 # Lua/LuaJIT
 *.luac
 
+# C++ / CMake / MSVC build artifacts
+build/
+build-*/
+cmake-build-*/
+out/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+compile_commands.json
+install_manifest.txt
+
+# Visual Studio user state
+.vs/
+*.user
+*.vcxproj.user
+*.vcxproj.filters.user
+*.suo
+*.sdf
+*.opensdf
+
+# Native build outputs (in-source builds; out-of-source covered by build/)
+*.obj
+*.o
+*.lib
+*.exp
+*.ilk
+*.pdb
+*.idb
+*.dll
+*.exe
+
+# MSBuild platform/config output dirs (in-source builds only)
+[Dd]ebug/
+[Rr]elease/
+RelWithDebInfo/
+MinSizeRel/
+x64/
+Win32/
+
 # Editor swap
 *.swp
 *.swo
@@ -11,5 +51,7 @@
 Thumbs.db
 .DS_Store
 
+# OpenLab artifacts — drills are intentionally per-user, snapshots are dev-only
 *.drill
+*.bin
 snapshots/

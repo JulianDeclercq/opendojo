@@ -1,0 +1,11 @@
+; Exports for the dinput8.dll proxy. Names must match the real
+; C:\Windows\System32\dinput8.dll exactly so callers find them under the
+; same ordinals. The implementations in src/proxy_dinput8.cpp simply
+; forward to the loaded-at-DllMain pointers.
+EXPORTS
+    DirectInput8Create
+    DllCanUnloadNow      PRIVATE
+    DllGetClassObject    PRIVATE
+    DllRegisterServer    PRIVATE
+    DllUnregisterServer  PRIVATE
+    GetdfDIJoystick
