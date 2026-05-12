@@ -1,4 +1,4 @@
-# OpenLab native DLL
+# OpenDojo native DLL
 
 Standalone Windows DLL for Tekken 8 drill export/import. No UE4SS, no Cheat
 Engine — just drop a single DLL into the game folder.
@@ -10,7 +10,7 @@ Engine — just drop a single DLL into the game folder.
 - Builds a `dinput8.dll` that the game loads via the DLL proxy pattern.
 - Forwards every export to the real `C:\Windows\System32\dinput8.dll` so
   controller input keeps working unchanged.
-- Writes `openlab.log` next to the game exe on startup as a load-success
+- Writes `opendojo.log` next to the game exe on startup as a load-success
   indicator (and as the only debug channel — release builds have no console).
 
 What's **not** here yet (still in the CE Lua script):
@@ -20,7 +20,7 @@ What's **not** here yet (still in the CE Lua script):
 - Hotkey loop
 - Per-slot flag handling
 
-Those land in subsequent commits. The CE script in `../cheatengine/openlab.lua`
+Those land in subsequent commits. The CE script in `../cheatengine/opendojo.lua`
 remains the working v0 until the DLL feature-matches it.
 
 ## Build
@@ -51,8 +51,8 @@ need the Visual C++ redistributable installed.
 3. Launch Tekken 8 **offline**. Denuvo / online play with a third-party DLL
    in the game folder is an anti-cheat risk; this DLL is meant for solo
    practice-mode use only.
-4. Verify `openlab.log` was created in that same directory and reads
-   `OpenLab v0.1.0 starting up`. If yes, the DLL loaded successfully.
+4. Verify `opendojo.log` was created in that same directory and reads
+   `OpenDojo v0.1.0 starting up`. If yes, the DLL loaded successfully.
 
 To uninstall: delete `dinput8.dll` from that folder.
 
@@ -67,7 +67,7 @@ If a future Tekken patch ever drops the DirectInput8 import, fall back to
 `version.dll` — it's loaded by virtually every Win32 process. Adding a new
 proxy is a two-file diff: drop a `proxy_<name>.cpp` and `proxy_<name>.def`
 next to the existing ones, then rebuild with
-`-DOPENLAB_PROXY=<name>`.
+`-DOPENDOJO_PROXY=<name>`.
 
 ## Layout
 
@@ -86,10 +86,10 @@ dll/
 ## Notes for the future
 
 - **Where drills live**: not decided yet. Probably
-  `<game>\Polaris\Binaries\Win64\openlab_drills\` for "drop-and-go" UX, with
+  `<game>\Polaris\Binaries\Win64\opendojo_drills\` for "drop-and-go" UX, with
   a config file override. Will be revisited when drill I/O ports over.
 - **Hotkeys**: planned via `RegisterHotKey` on a dedicated thread. The CE
   script's behavior (global, focus-independent) is the right baseline.
-- **Aux desync**: see `../memory/project_openlab_aux_desync.md`. Once the
+- **Aux desync**: see `../memory/project_opendojo_aux_desync.md`. Once the
   DLL is in place we can hook `FUN_141807610`'s mod-251 result or NOP the
   comparison in `FUN_1418e8ea0` so drills become fully hand-editable.

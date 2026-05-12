@@ -15,12 +15,12 @@ std::mutex g_mutex;
 FILE*      g_file = nullptr;
 
 // Drop the log next to the exe. For Tekken that's
-// <TEKKEN 8>\Polaris\Binaries\Win64\openlab.log.
+// <TEKKEN 8>\Polaris\Binaries\Win64\opendojo.log.
 std::filesystem::path log_path() {
     wchar_t buf[MAX_PATH];
     DWORD n = GetModuleFileNameW(nullptr, buf, MAX_PATH);
-    if (n == 0 || n >= MAX_PATH) return L"openlab.log";
-    return std::filesystem::path(buf).parent_path() / L"openlab.log";
+    if (n == 0 || n >= MAX_PATH) return L"opendojo.log";
+    return std::filesystem::path(buf).parent_path() / L"opendojo.log";
 }
 
 void write_timestamp(FILE* f) {
@@ -35,7 +35,7 @@ void write_timestamp(FILE* f) {
 
 }  // namespace
 
-bool openlab::log::init() {
+bool opendojo::log::init() {
     std::lock_guard guard(g_mutex);
     if (g_file) return true;
     auto path = log_path();
@@ -44,22 +44,22 @@ bool openlab::log::init() {
         return false;
     }
     write_timestamp(g_file);
-    std::fprintf(g_file, "OpenLab log opened: %ls\n", path.wstring().c_str());
+    std::fprintf(g_file, "OpenDojo log opened: %ls\n", path.wstring().c_str());
     std::fflush(g_file);
     return true;
 }
 
-void openlab::log::shutdown() {
+void opendojo::log::shutdown() {
     std::lock_guard guard(g_mutex);
     if (g_file) {
         write_timestamp(g_file);
-        std::fprintf(g_file, "OpenLab log closed\n");
+        std::fprintf(g_file, "OpenDojo log closed\n");
         std::fclose(g_file);
         g_file = nullptr;
     }
 }
 
-void openlab::log::write(std::string_view line) {
+void opendojo::log::write(std::string_view line) {
     std::lock_guard guard(g_mutex);
     if (!g_file) return;
     write_timestamp(g_file);
@@ -67,7 +67,7 @@ void openlab::log::write(std::string_view line) {
     std::fflush(g_file);
 }
 
-void openlab::log::format(const char* fmt, ...) {
+void opendojo::log::format(const char* fmt, ...) {
     std::lock_guard guard(g_mutex);
     if (!g_file) return;
     write_timestamp(g_file);

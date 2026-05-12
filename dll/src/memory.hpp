@@ -10,7 +10,7 @@
 // All addresses are absolute (i.e. include Polaris's runtime base).
 // Use polaris() to add a module-relative offset.
 
-namespace openlab::memory {
+namespace opendojo::memory {
 
 // Runtime base of Polaris-Win64-Shipping.exe. 0 if the module isn't loaded
 // (which only happens if the DLL was somehow injected into the wrong
@@ -39,4 +39,4 @@ void write_u8 (std::uintptr_t addr, std::uint8_t  v);
 void read_bytes (std::uintptr_t addr,       void* out, std::size_t n);
 void write_bytes(std::uintptr_t addr, const void* src, std::size_t n);
 
-}  // namespace openlab::memory
+}  // namespace opendojo::memory

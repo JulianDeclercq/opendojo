@@ -15,11 +15,11 @@
 //
 // All functions operate on the 7202-byte slot payload (the same bytes that
 // live in pool1[slot_idx]). Reading a slot is a separate concern handled
-// by openlab::slot::read().
+// by opendojo::slot::read().
 
-namespace openlab::drill {
+namespace opendojo::drill {
 
-inline constexpr std::size_t SLOT_PITCH = 0x1C22;  // = openlab::slot::SLOT_PITCH
+inline constexpr std::size_t SLOT_PITCH = 0x1C22;  // = opendojo::slot::SLOT_PITCH
 
 // Legacy binary container layout (16-byte header + 7202 bytes = 7218 total).
 inline constexpr char         BINARY_MAGIC[4] = {'O','L','A','B'};
@@ -57,4 +57,4 @@ struct BinaryResult {
 };
 BinaryResult decode_binary(std::string_view content);
 
-}  // namespace openlab::drill
+}  // namespace opendojo::drill

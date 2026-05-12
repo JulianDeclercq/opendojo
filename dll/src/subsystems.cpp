@@ -2,7 +2,7 @@
 
 #include "memory.hpp"
 
-std::uintptr_t openlab::subsystems::lookup(std::uintptr_t key_offset) {
+std::uintptr_t opendojo::subsystems::lookup(std::uintptr_t key_offset) {
     auto base = memory::polaris_base();
     if (!base) return 0;
     auto ctx = memory::read_u64(base + CTX_PTR_OFFSET);
@@ -33,10 +33,10 @@ std::uintptr_t openlab::subsystems::lookup(std::uintptr_t key_offset) {
     return 0;
 }
 
-std::uintptr_t openlab::subsystems::pool1() {
+std::uintptr_t opendojo::subsystems::pool1() {
     return memory::read_u64(memory::polaris(POOL1_PTR_OFFSET));
 }
 
-std::uintptr_t openlab::subsystems::pool2() {
+std::uintptr_t opendojo::subsystems::pool2() {
     return memory::read_u64(memory::polaris(POOL2_PTR_OFFSET));
 }

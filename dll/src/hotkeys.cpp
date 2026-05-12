@@ -8,7 +8,7 @@
 #include "commands.hpp"
 #include "log.hpp"
 
-namespace openlab::hotkeys {
+namespace opendojo::hotkeys {
 
 namespace {
 
@@ -27,14 +27,14 @@ void run_loop() {
         if (RegisterHotKey(nullptr, ID_EXPORT_BASE + i, 0, VK_F1 + i)) {
             ++ok;
         } else {
-            OPENLAB_LOG("hotkey: RegisterHotKey F%d failed (GLE=%lu)",
+            OPENDOJO_LOG("hotkey: RegisterHotKey F%d failed (GLE=%lu)",
                         i + 1, GetLastError());
             ++fail;
         }
         if (RegisterHotKey(nullptr, ID_IMPORT_BASE + i, MOD_CONTROL, '1' + i)) {
             ++ok;
         } else {
-            OPENLAB_LOG("hotkey: RegisterHotKey Ctrl+%d failed (GLE=%lu)",
+            OPENDOJO_LOG("hotkey: RegisterHotKey Ctrl+%d failed (GLE=%lu)",
                         i + 1, GetLastError());
             ++fail;
         }
@@ -42,11 +42,11 @@ void run_loop() {
     if (RegisterHotKey(nullptr, ID_STATUS, 0, VK_F9)) {
         ++ok;
     } else {
-        OPENLAB_LOG("hotkey: RegisterHotKey F9 failed (GLE=%lu)", GetLastError());
+        OPENDOJO_LOG("hotkey: RegisterHotKey F9 failed (GLE=%lu)", GetLastError());
         ++fail;
     }
 
-    OPENLAB_LOG("hotkeys: %d registered, %d failed — F1..F8 export, Ctrl+1..8 import, F9 status",
+    OPENDOJO_LOG("hotkeys: %d registered, %d failed — F1..F8 export, Ctrl+1..8 import, F9 status",
                 ok, fail);
 
     // Message pump. The process holds this thread for its lifetime; we
@@ -57,11 +57,11 @@ void run_loop() {
         if (msg.message != WM_HOTKEY) continue;
         const int id = static_cast<int>(msg.wParam);
         if (id >= ID_EXPORT_BASE && id < ID_EXPORT_BASE + 8) {
-            openlab::commands::export_slot(static_cast<std::size_t>(id - ID_EXPORT_BASE));
+            opendojo::commands::export_slot(static_cast<std::size_t>(id - ID_EXPORT_BASE));
         } else if (id >= ID_IMPORT_BASE && id < ID_IMPORT_BASE + 8) {
-            openlab::commands::import_slot(static_cast<std::size_t>(id - ID_IMPORT_BASE));
+            opendojo::commands::import_slot(static_cast<std::size_t>(id - ID_IMPORT_BASE));
         } else if (id == ID_STATUS) {
-            openlab::commands::show_status();
+            opendojo::commands::show_status();
         }
     }
 }
@@ -75,4 +75,4 @@ bool start() {
     return true;
 }
 
-}  // namespace openlab::hotkeys
+}  // namespace opendojo::hotkeys

@@ -5,7 +5,7 @@
 // calls through transparently. The game must never notice we replaced
 // its DLL — every export it asks for has to behave identically.
 
-namespace openlab::proxy {
+namespace opendojo::proxy {
 
 // Call from DLL_PROCESS_ATTACH before any forwarded export can run.
 // Returns false if the real DLL can't be loaded — at which point we
@@ -16,4 +16,4 @@ bool load();
 // Call from DLL_PROCESS_DETACH. Safe to call even if load() failed.
 void unload();
 
-}  // namespace openlab::proxy
+}  // namespace opendojo::proxy

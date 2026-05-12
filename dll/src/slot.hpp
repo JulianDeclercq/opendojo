@@ -19,7 +19,7 @@
 // The flag is critical — without it the in-game practice menu shows "Not Set"
 // and playback refuses to fire, even with valid bytes in pool1.
 
-namespace openlab::slot {
+namespace opendojo::slot {
 
 inline constexpr std::size_t   SLOT_PITCH = 0x1C22;  // 7202 bytes per slot
 inline constexpr std::size_t   USER_SLOTS = 8;
@@ -62,4 +62,4 @@ WriteStatus write(std::size_t slot_idx, const std::uint8_t* data);
 // singleton / subB / subC). Exposed for diagnostics & tests.
 WriteStatus set_recorded_flag(std::size_t slot_idx, bool recorded);
 
-}  // namespace openlab::slot
+}  // namespace opendojo::slot

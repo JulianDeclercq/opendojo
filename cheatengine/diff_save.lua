@@ -12,7 +12,7 @@
 -- The bytes that changed (outside pool1 itself) are the candidate
 -- "is recorded" indicator.
 
-local SNAPSHOT_DIR = [[C:\Users\ethan\Desktop\openlab\cheatengine\snapshots]]
+local SNAPSHOT_DIR = [[C:\Users\ethan\Desktop\opendojo\cheatengine\snapshots]]
 
 local function log(fmt, ...) print(string.format("[diff] " .. fmt, ...)) end
 

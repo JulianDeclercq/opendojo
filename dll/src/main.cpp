@@ -1,11 +1,11 @@
-// OpenLab DLL entry point. Lives at <game>\Polaris\Binaries\Win64\dinput8.dll
-// (proxy name controlled by CMake's OPENLAB_PROXY option). When the game
+// OpenDojo DLL entry point. Lives at <game>\Polaris\Binaries\Win64\dinput8.dll
+// (proxy name controlled by CMake's OPENDOJO_PROXY option). When the game
 // loads what it thinks is the system dinput8.dll, this DllMain runs first.
 //
 // Responsibilities:
 //   1. Resolve and pin the real dinput8.dll so our forwarded exports work.
 //   2. Open the log file.
-//   3. Spawn the OpenLab init thread (so we don't block the loader — DllMain
+//   3. Spawn the OpenDojo init thread (so we don't block the loader — DllMain
 //      runs under the loader lock and can't do meaningful work synchronously).
 //
 // Actual recording-buffer access, hotkeys, drill I/O — none of that has been
@@ -29,21 +29,21 @@ namespace {
 // Background thread: anything that can't or shouldn't run under the loader
 // lock goes here. Keep DllMain itself trivial.
 void init_thread() {
-    OPENLAB_LOG("OpenLab v0.1.0 starting up");
+    OPENDOJO_LOG("OpenDojo v0.1.0 starting up");
 
     // The game's main module. Once we port the CE Lua, this is what we add
     // module offsets to in order to reach pool1 and the service-locator.
-    auto base = openlab::memory::polaris_base();
+    auto base = opendojo::memory::polaris_base();
     if (!base) {
-        OPENLAB_LOG("WARNING: Polaris-Win64-Shipping.exe not loaded — "
+        OPENDOJO_LOG("WARNING: Polaris-Win64-Shipping.exe not loaded — "
                     "DLL was injected into the wrong process");
         return;
     }
-    OPENLAB_LOG("polaris_base = 0x%llX", static_cast<unsigned long long>(base));
+    OPENDOJO_LOG("polaris_base = 0x%llX", static_cast<unsigned long long>(base));
 
     // Pool1 is lazy — null until the user records once per game launch.
-    auto p1 = openlab::subsystems::pool1();
-    OPENLAB_LOG("pool1 = 0x%llX (%s)",
+    auto p1 = opendojo::subsystems::pool1();
+    OPENDOJO_LOG("pool1 = 0x%llX (%s)",
                 static_cast<unsigned long long>(p1),
                 p1 ? "ready" : "not allocated yet — record once in practice mode");
 
@@ -52,15 +52,15 @@ void init_thread() {
     // the misses tells us if we need a deferred resolver.
     struct entry { const char* name; std::uintptr_t key; };
     const entry probes[] = {
-        { "gameplay",  openlab::subsystems::KEY_GAMEPLAY  },
-        { "singleton", openlab::subsystems::KEY_SINGLETON },
-        { "subB",      openlab::subsystems::KEY_SUBB      },
-        { "subC",      openlab::subsystems::KEY_SUBC      },
-        { "subD",      openlab::subsystems::KEY_SUBD      },
+        { "gameplay",  opendojo::subsystems::KEY_GAMEPLAY  },
+        { "singleton", opendojo::subsystems::KEY_SINGLETON },
+        { "subB",      opendojo::subsystems::KEY_SUBB      },
+        { "subC",      opendojo::subsystems::KEY_SUBC      },
+        { "subD",      opendojo::subsystems::KEY_SUBD      },
     };
     for (auto& p : probes) {
-        auto addr = openlab::subsystems::lookup(p.key);
-        OPENLAB_LOG("  %-9s subsystem = 0x%llX %s",
+        auto addr = opendojo::subsystems::lookup(p.key);
+        OPENDOJO_LOG("  %-9s subsystem = 0x%llX %s",
                     p.name,
                     static_cast<unsigned long long>(addr),
                     addr ? "" : "(not resolved)");
@@ -68,9 +68,9 @@ void init_thread() {
 
     // Start the hotkey loop on its own thread. It registers F1..F8 / Ctrl+1..8
     // / F9 and dispatches to commands::* — survives this thread's exit.
-    openlab::hotkeys::start();
+    opendojo::hotkeys::start();
 
-    OPENLAB_LOG("init thread done — entering diagnostic poll loop");
+    OPENDOJO_LOG("init thread done — entering diagnostic poll loop");
 
     // Diagnostic poller: log transitions in pool1 / subsystem availability so
     // we can see exactly when the game finishes initializing them. Runs for
@@ -82,15 +82,15 @@ void init_thread() {
 
     struct probe_state { const char* name; std::uintptr_t key; std::uintptr_t last; };
     probe_state state[] = {
-        { "gameplay",  openlab::subsystems::KEY_GAMEPLAY,  0 },
-        { "singleton", openlab::subsystems::KEY_SINGLETON, 0 },
-        { "subB",      openlab::subsystems::KEY_SUBB,      0 },
-        { "subC",      openlab::subsystems::KEY_SUBC,      0 },
-        { "subD",      openlab::subsystems::KEY_SUBD,      0 },
+        { "gameplay",  opendojo::subsystems::KEY_GAMEPLAY,  0 },
+        { "singleton", opendojo::subsystems::KEY_SINGLETON, 0 },
+        { "subB",      opendojo::subsystems::KEY_SUBB,      0 },
+        { "subC",      opendojo::subsystems::KEY_SUBC,      0 },
+        { "subD",      opendojo::subsystems::KEY_SUBD,      0 },
     };
     std::uintptr_t last_pool1                                = 0;
     bool           announced_ok                              = false;
-    std::uint16_t  last_slot_counts[openlab::slot::USER_SLOTS] = {};
+    std::uint16_t  last_slot_counts[opendojo::slot::USER_SLOTS] = {};
 
     auto elapsed_s = [&] {
         return std::chrono::duration_cast<std::chrono::seconds>(
@@ -100,9 +100,9 @@ void init_thread() {
     while (std::chrono::steady_clock::now() - t0 < poll_deadline) {
         bool all_resolved = true;
         for (auto& p : state) {
-            auto cur = openlab::subsystems::lookup(p.key);
+            auto cur = opendojo::subsystems::lookup(p.key);
             if (cur != p.last) {
-                OPENLAB_LOG("[poll T+%llds] %s: 0x%llX -> 0x%llX",
+                OPENDOJO_LOG("[poll T+%llds] %s: 0x%llX -> 0x%llX",
                             static_cast<long long>(elapsed_s()),
                             p.name,
                             static_cast<unsigned long long>(p.last),
@@ -112,9 +112,9 @@ void init_thread() {
             if (!p.last) all_resolved = false;
         }
 
-        auto pool1_now = openlab::subsystems::pool1();
+        auto pool1_now = opendojo::subsystems::pool1();
         if (pool1_now != last_pool1) {
-            OPENLAB_LOG("[poll T+%llds] pool1: 0x%llX -> 0x%llX",
+            OPENDOJO_LOG("[poll T+%llds] pool1: 0x%llX -> 0x%llX",
                         static_cast<long long>(elapsed_s()),
                         static_cast<unsigned long long>(last_pool1),
                         static_cast<unsigned long long>(pool1_now));
@@ -123,9 +123,9 @@ void init_thread() {
             // Confirm slot reads work end-to-end: dump every user slot's
             // event count the moment pool1 first appears.
             if (pool1_now) {
-                for (std::size_t i = 0; i < openlab::slot::USER_SLOTS; ++i) {
-                    auto n = openlab::slot::event_count(i);
-                    OPENLAB_LOG("  slot %zu: %u events", i + 1, static_cast<unsigned>(n));
+                for (std::size_t i = 0; i < opendojo::slot::USER_SLOTS; ++i) {
+                    auto n = opendojo::slot::event_count(i);
+                    OPENDOJO_LOG("  slot %zu: %u events", i + 1, static_cast<unsigned>(n));
                     last_slot_counts[i] = n;
                 }
             }
@@ -134,10 +134,10 @@ void init_thread() {
         // Track slot event-count transitions (a new recording, a slot
         // clear, etc.) so the log shows in-engine recording activity.
         if (pool1_now) {
-            for (std::size_t i = 0; i < openlab::slot::USER_SLOTS; ++i) {
-                auto cur = openlab::slot::event_count(i);
+            for (std::size_t i = 0; i < opendojo::slot::USER_SLOTS; ++i) {
+                auto cur = opendojo::slot::event_count(i);
                 if (cur != last_slot_counts[i]) {
-                    OPENLAB_LOG("[poll T+%llds] slot %zu: %u -> %u events",
+                    OPENDOJO_LOG("[poll T+%llds] slot %zu: %u -> %u events",
                                 static_cast<long long>(elapsed_s()),
                                 i + 1,
                                 static_cast<unsigned>(last_slot_counts[i]),
@@ -148,20 +148,20 @@ void init_thread() {
                     // Encodes the bytes to text, decodes the text back,
                     // and confirms the meaningful prefix matches.
                     if (cur > 0) {
-                        std::uint8_t bytes[openlab::slot::SLOT_PITCH];
-                        if (!openlab::slot::read(i, bytes)) {
-                            OPENLAB_LOG("  [drill] slot %zu: read failed", i + 1);
+                        std::uint8_t bytes[opendojo::slot::SLOT_PITCH];
+                        if (!opendojo::slot::read(i, bytes)) {
+                            OPENDOJO_LOG("  [drill] slot %zu: read failed", i + 1);
                             continue;
                         }
-                        std::string text = openlab::drill::encode_text(bytes, i);
-                        auto r = openlab::drill::decode_text(text);
+                        std::string text = opendojo::drill::encode_text(bytes, i);
+                        auto r = opendojo::drill::decode_text(text);
                         if (!r.error.empty()) {
-                            OPENLAB_LOG("  [drill] slot %zu: decode FAILED: %s",
+                            OPENDOJO_LOG("  [drill] slot %zu: decode FAILED: %s",
                                         i + 1, r.error.c_str());
                             continue;
                         }
                         const std::size_t meaningful = 2 + std::size_t(cur) * 4;
-                        bool ok = (r.data.size() == openlab::slot::SLOT_PITCH);
+                        bool ok = (r.data.size() == opendojo::slot::SLOT_PITCH);
                         std::size_t first_diff = 0;
                         if (ok) {
                             for (std::size_t b = 0; b < meaningful; ++b) {
@@ -173,10 +173,10 @@ void init_thread() {
                             }
                         }
                         if (ok) {
-                            OPENLAB_LOG("  [drill] slot %zu: round-trip OK (%u events, %zu bytes)",
+                            OPENDOJO_LOG("  [drill] slot %zu: round-trip OK (%u events, %zu bytes)",
                                         i + 1, static_cast<unsigned>(cur), meaningful);
                         } else {
-                            OPENLAB_LOG("  [drill] slot %zu: MISMATCH at byte %zu (orig=0x%02X, decoded=0x%02X)",
+                            OPENDOJO_LOG("  [drill] slot %zu: MISMATCH at byte %zu (orig=0x%02X, decoded=0x%02X)",
                                         i + 1, first_diff,
                                         static_cast<unsigned>(bytes[first_diff]),
                                         static_cast<unsigned>(r.data[first_diff]));
@@ -187,7 +187,7 @@ void init_thread() {
         }
 
         if (all_resolved && !announced_ok) {
-            OPENLAB_LOG("[poll T+%llds] all subsystems resolved",
+            OPENDOJO_LOG("[poll T+%llds] all subsystems resolved",
                         static_cast<long long>(elapsed_s()));
             announced_ok = true;
         }
@@ -195,7 +195,7 @@ void init_thread() {
         std::this_thread::sleep_for(poll_interval);
     }
 
-    OPENLAB_LOG("[poll] diagnostic poller exiting after %llds",
+    OPENDOJO_LOG("[poll] diagnostic poller exiting after %llds",
                 static_cast<long long>(elapsed_s()));
 }
 
@@ -207,15 +207,15 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID /*reserved*/) {
             DisableThreadLibraryCalls(module);
 
             // Open the log first so proxy::load() failures show up there.
-            openlab::log::init();
+            opendojo::log::init();
 
             // Real dinput8.dll must be reachable before the game makes its
             // first forwarded call. If this fails the game will crash on
             // DirectInput8Create, so we abort the DLL load and let the game
             // fall back to the real system DLL.
-            if (!openlab::proxy::load()) {
-                OPENLAB_LOG("proxy::load() failed — refusing to attach");
-                openlab::log::shutdown();
+            if (!opendojo::proxy::load()) {
+                OPENDOJO_LOG("proxy::load() failed — refusing to attach");
+                opendojo::log::shutdown();
                 return FALSE;
             }
 
@@ -224,8 +224,8 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID /*reserved*/) {
             break;
         }
         case DLL_PROCESS_DETACH:
-            openlab::log::shutdown();
-            openlab::proxy::unload();
+            opendojo::log::shutdown();
+            opendojo::proxy::unload();
             break;
     }
     return TRUE;

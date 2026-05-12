@@ -1,4 +1,4 @@
-# OpenLab
+# OpenDojo
 
 Tekken 8 practice-mode drill sharing.
 
@@ -30,20 +30,20 @@ UE4SS mod (C++ DLL or LuaJIT-enabled UE4SS build) is on the roadmap.
 
 ## Install
 
-1. Clone this repo somewhere stable (e.g. `C:\Users\you\Desktop\openlab`).
-2. Open `cheatengine/openlab.lua` in a text editor and update `DRILL_DIR` to
-   the absolute path of `<repo>\Mods\OpenLab\drills` on your machine.
+1. Clone this repo somewhere stable (e.g. `C:\Users\you\Desktop\opendojo`).
+2. Open `cheatengine/opendojo.lua` in a text editor and update `DRILL_DIR` to
+   the absolute path of `<repo>\Mods\OpenDojo\drills` on your machine.
 3. (Optional, for the UE4SS stub): create a directory junction so the mod
    files live in this repo but Tekken's UE4SS can still see them. Junctions
    work cross-volume on Windows and don't require admin:
 
    ```powershell
    New-Item -ItemType Junction `
-       -Path  "E:\Steam\steamapps\common\TEKKEN 8\Polaris\Binaries\Win64\Mods\OpenLab" `
-       -Target "<repo>\Mods\OpenLab"
+       -Path  "E:\Steam\steamapps\common\TEKKEN 8\Polaris\Binaries\Win64\Mods\OpenDojo" `
+       -Target "<repo>\Mods\OpenDojo"
    ```
 
-   Then add `OpenLab : 1` to `<TekkenInstall>\Polaris\Binaries\Win64\Mods\mods.txt`.
+   Then add `OpenDojo : 1` to `<TekkenInstall>\Polaris\Binaries\Win64\Mods\mods.txt`.
 
 ## Usage
 
@@ -55,11 +55,11 @@ UE4SS mod (C++ DLL or LuaJIT-enabled UE4SS build) is on the roadmap.
 3. Open Cheat Engine and attach it to `Polaris-Win64-Shipping.exe`.
 4. In CE: **Table > Show Cheat Table Lua Script** (or open `Memory View > Tools
    > Auto Assemble`, then **File > Load Lua Script**). Paste or load
-   `cheatengine/openlab.lua` and execute it. You should see:
+   `cheatengine/opendojo.lua` and execute it. You should see:
 
    ```
-   [OpenLab] loaded — NumPad 1..8 = export, Ctrl+NumPad 1..8 = import, NumPad 0 = status
-   [OpenLab] drill files: C:\path\to\openlab\Mods\OpenLab\drills
+   [OpenDojo] loaded — NumPad 1..8 = export, Ctrl+NumPad 1..8 = import, NumPad 0 = status
+   [OpenDojo] drill files: C:\path\to\opendojo\Mods\OpenDojo\drills
    ```
 
 5. Use the hotkeys (they're global — they work whether CE or Tekken has focus):
@@ -73,10 +73,10 @@ UE4SS mod (C++ DLL or LuaJIT-enabled UE4SS build) is on the roadmap.
    The number-row import keys are global — they'll fire from any focused
    window, including Tekken itself. Don't unload the script if you're typing
    in another app, or 1–8 will trigger imports unexpectedly. Close the CE
-   Lua engine window (or call `OpenLab_destroy()` from CE's console) to
+   Lua engine window (or call `OpenDojo_destroy()` from CE's console) to
    release the hotkeys.
 
-Drill files land in `Mods/OpenLab/drills/` inside this repo — committed and
+Drill files land in `Mods/OpenDojo/drills/` inside this repo — committed and
 shareable as-is.
 
 ## File format
@@ -102,15 +102,15 @@ Tekken stores practice-mode recordings in two heap-allocated global pools:
   `Polaris-Win64-Shipping.exe+0x986AC70`. Layout: 9 slots × 7202 bytes. Slots
   0–7 = user slots; slot 8 = scratch (in-progress).
 - **Pool 2** (frequency-modulated metadata): pointer at `+0x986AC78`. Only
-  used for advanced playback modes — OpenLab v0 doesn't touch it.
+  used for advanced playback modes — OpenDojo v0 doesn't touch it.
 
 When you press Confirm on the "Record this movement?" dialog, the native save
 function (`Polaris+0x18df920`) `memcpy`s 7202 bytes from slot 8 into your
-chosen user slot. OpenLab reads/writes that same pool directly.
+chosen user slot. OpenDojo reads/writes that same pool directly.
 
 Writing pool1 by itself isn't enough — the game has four global "at least
 one slot has a recording" flags scattered across different subsystems, and
-the menu/playback refuse to recognize the data until those are set. OpenLab
+the menu/playback refuse to recognize the data until those are set. OpenDojo
 resolves the subsystems at runtime by walking the same service-locator hash
 map the game uses (`FUN_1418db8f0`), then writes the flags after the pool1
 copy.
@@ -139,13 +139,13 @@ Per-event format (each 4 bytes):
 ## Layout
 
 ```
-openlab/
+opendojo/
 ├── README.md
 ├── .gitignore
 ├── cheatengine/
-│   └── openlab.lua            # v0 entry point — load this in CE
+│   └── opendojo.lua            # v0 entry point — load this in CE
 └── Mods/
-    └── OpenLab/
+    └── OpenDojo/
         ├── enabled.txt        # UE4SS sentinel
         ├── Scripts/main.lua   # UE4SS info stub
         └── drills/            # exported drill files live here (committed)

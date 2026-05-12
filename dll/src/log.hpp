@@ -3,14 +3,14 @@
 #include <cstdio>
 #include <string_view>
 
-// Append-only line logger writing to <game>\Polaris\Binaries\Win64\openlab.log.
+// Append-only line logger writing to <game>\Polaris\Binaries\Win64\opendojo.log.
 // Thread-safe. Falls silent if the log file can't be opened. We have no console
 // in release builds — this file is our only window into runtime behavior.
 //
 // Uses printf-style formatting (deliberately — keeps us off the bleeding edge
 // of C++20 std::format support, which varies by MSVC point release).
 
-namespace openlab::log {
+namespace opendojo::log {
 
 // Open the log file. Call from DllMain attach. Returns false on failure;
 // subsequent write()/format() calls become no-ops.
@@ -26,6 +26,6 @@ void write(std::string_view line);
 // printf-style. fmt and args follow the usual std::printf conventions.
 void format(const char* fmt, ...);
 
-}  // namespace openlab::log
+}  // namespace opendojo::log
 
-#define OPENLAB_LOG(...) ::openlab::log::format(__VA_ARGS__)
+#define OPENDOJO_LOG(...) ::opendojo::log::format(__VA_ARGS__)

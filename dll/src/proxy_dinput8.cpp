@@ -30,7 +30,7 @@ GetdfDIJoystick_fn     p_GetdfDIJoystick       = nullptr;
 
 }  // namespace
 
-bool openlab::proxy::load() {
+bool opendojo::proxy::load() {
     wchar_t path[MAX_PATH];
     UINT n = GetSystemDirectoryW(path, MAX_PATH);
     if (n == 0 || n >= MAX_PATH - 16) return false;
@@ -38,7 +38,7 @@ bool openlab::proxy::load() {
 
     g_real = LoadLibraryW(path);
     if (!g_real) {
-        OPENLAB_LOG("proxy: LoadLibraryW(%ls) failed, GetLastError=%lu",
+        OPENDOJO_LOG("proxy: LoadLibraryW(%ls) failed, GetLastError=%lu",
                     path, GetLastError());
         return false;
     }
@@ -53,13 +53,13 @@ bool openlab::proxy::load() {
     // DirectInput8Create is the only one Tekken is known to call. Missing it
     // means we have the wrong DLL or a Windows version we haven't seen.
     if (!p_DirectInput8Create) {
-        OPENLAB_LOG("proxy: real dinput8.dll missing DirectInput8Create — aborting");
+        OPENDOJO_LOG("proxy: real dinput8.dll missing DirectInput8Create — aborting");
         return false;
     }
     return true;
 }
 
-void openlab::proxy::unload() {
+void opendojo::proxy::unload() {
     if (g_real) {
         FreeLibrary(g_real);
         g_real = nullptr;

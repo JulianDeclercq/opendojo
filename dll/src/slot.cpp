@@ -3,7 +3,7 @@
 #include "memory.hpp"
 #include "subsystems.hpp"
 
-namespace openlab::slot {
+namespace opendojo::slot {
 
 const char* describe(WriteStatus s) {
     switch (s) {
@@ -39,7 +39,7 @@ WriteStatus set_recorded_flag(std::size_t slot_idx, bool recorded) {
     if (slot_idx >= USER_SLOTS) return WriteStatus::InvalidSlot;
 
     // Re-resolve every time — subsystem pointers change at scene transitions
-    // (see project_openlab_subsystem_lifecycle memory). Caching breaks
+    // (see project_opendojo_subsystem_lifecycle memory). Caching breaks
     // silently after the first scene change.
     auto gameplay  = subsystems::lookup(subsystems::KEY_GAMEPLAY);
     auto singleton = subsystems::lookup(subsystems::KEY_SINGLETON);
@@ -56,11 +56,20 @@ WriteStatus set_recorded_flag(std::size_t slot_idx, bool recorded) {
 
     if (recorded) {
         memory::write_u32(flag_addr,         2u);
+        // singleton +0x02 = 0x40 is the "recording session active" marker the
+        // engine sets during a real practice recording. Empirically observed
+        // 0x40 during P2-side AND P1-side recordings; cleared to 0x00 after
+        // our import (which is the only state diff between post-record and
+        // post-import). Without this, playback ignores the per-event bit 0x20
+        // side tag and falls back to current-side interpretation — which
+        // mirrors any drill recorded with bit 0x20 set (i.e. P2-side drills).
+        memory::write_u8 (singleton + 0x002, 0x40u);
         memory::write_u8 (singleton + 0x008, 0x01u);
         memory::write_u8 (subB      + 0x065, 0x00u);
         memory::write_u32(subC      + 0x25C, 1u);
     } else {
         memory::write_u32(flag_addr,         0u);
+        memory::write_u8 (singleton + 0x002, 0x00u);
         memory::write_u8 (singleton + 0x008, 0x00u);
         memory::write_u8 (subB      + 0x065, 0x01u);
         memory::write_u32(subC      + 0x25C, 0xFFFFFFFFu);  // -1 as uint32
@@ -81,4 +90,4 @@ WriteStatus write(std::size_t slot_idx, const std::uint8_t* data) {
     return set_recorded_flag(slot_idx, true);
 }
 
-}  // namespace openlab::slot
+}  // namespace opendojo::slot

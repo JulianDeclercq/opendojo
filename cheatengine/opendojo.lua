@@ -1,4 +1,4 @@
--- OpenLab v0 — Tekken 8 practice-mode drill export/import.
+-- OpenDojo v0 — Tekken 8 practice-mode drill export/import.
 --
 -- Run this inside Cheat Engine's Lua engine (Ctrl+Alt+L, File > Load).
 -- Tekken must be running and CE must be attached to Polaris-Win64-Shipping.exe.
@@ -11,10 +11,10 @@
 --   Ctrl+1..8     import slot_N.drill into user slot N
 --   F9            print status (module base, pool address, per-slot counts)
 --
--- Edit DRILL_DIR below to point at your local clone of the openlab repo.
+-- Edit DRILL_DIR below to point at your local clone of the opendojo repo.
 
-local OpenLab = {
-    DRILL_DIR        = [[C:\Users\ethan\Desktop\openlab\Mods\OpenLab\drills]],
+local OpenDojo = {
+    DRILL_DIR        = [[C:\Users\ethan\Desktop\opendojo\Mods\OpenDojo\drills]],
     POOL1_PTR_OFFSET = 0x986AC70,
     SLOT_PITCH       = 0x1C22,        -- 7202 bytes per slot
     USER_SLOTS       = 8,
@@ -65,7 +65,7 @@ local OpenLab = {
 -- ---------------------------------------------------------------------------
 
 local function log(fmt, ...)
-    print(string.format("[OpenLab] " .. fmt, ...))
+    print(string.format("[OpenDojo] " .. fmt, ...))
 end
 
 -- ---------------------------------------------------------------------------
@@ -85,7 +85,7 @@ end
 local function lookup_subsystem(key_offset)
     local base = get_module_base()
     if not base then return nil end
-    local ctx = readQword(base + OpenLab.CTX_PTR_OFFSET)
+    local ctx = readQword(base + OpenDojo.CTX_PTR_OFFSET)
     if not ctx or ctx == 0 then return nil end
     local map = readQword(ctx + 0x10)
     if not map or map == 0 then return nil end
@@ -123,25 +123,32 @@ end
 -- global "any slot recorded" indicators. `slot_idx` is 0..7.
 -- Returns true on success, false if any subsystem couldn't be resolved.
 local function set_recorded_flags(slot_idx, recorded)
-    local gameplay  = get_subsys("gameplay",  OpenLab.KEY_GAMEPLAY)
-    local singleton = get_subsys("singleton", OpenLab.KEY_SINGLETON)
-    local subB      = get_subsys("subB",      OpenLab.KEY_SUBB)
-    local subC      = get_subsys("subC",      OpenLab.KEY_SUBC)
+    local gameplay  = get_subsys("gameplay",  OpenDojo.KEY_GAMEPLAY)
+    local singleton = get_subsys("singleton", OpenDojo.KEY_SINGLETON)
+    local subB      = get_subsys("subB",      OpenDojo.KEY_SUBB)
+    local subC      = get_subsys("subC",      OpenDojo.KEY_SUBC)
     if not (gameplay and singleton and subB and subC) then
         log("subsystem lookup failed (gameplay=%s singleton=%s subB=%s subC=%s)",
             tostring(gameplay), tostring(singleton), tostring(subB), tostring(subC))
         return false
     end
-    local slot_flag_addr = gameplay + OpenLab.GAMEPLAY_SLOT_BASE
-                                    + slot_idx * OpenLab.GAMEPLAY_SLOT_STRIDE
-                                    + OpenLab.GAMEPLAY_SLOT_FLAG
+    local slot_flag_addr = gameplay + OpenDojo.GAMEPLAY_SLOT_BASE
+                                    + slot_idx * OpenDojo.GAMEPLAY_SLOT_STRIDE
+                                    + OpenDojo.GAMEPLAY_SLOT_FLAG
     if recorded then
         writeInteger(slot_flag_addr,     2)
+        -- singleton +0x02 = 0x40 is the "playback honors bit 0x20 side tag"
+        -- gate. Without it, P2-side recordings (bit 0x20 set in events) get
+        -- mirrored on import because the engine falls back to current-side
+        -- interpretation. Empirically observed 0x40 during live recording
+        -- sessions for both P1 and P2 sides.
+        writeBytes(singleton + 0x002, 0x40)
         writeBytes(singleton + 0x008, 0x01)
         writeBytes(subB      + 0x065, 0x00)
         writeInteger(subC    + 0x25C,    1)
     else
         writeInteger(slot_flag_addr,     0)
+        writeBytes(singleton + 0x002, 0x00)
         writeBytes(singleton + 0x008, 0x00)
         writeBytes(subB      + 0x065, 0x01)
         writeInteger(subC    + 0x25C,   -1)
@@ -155,7 +162,7 @@ local function get_pool1_base()
         log("Polaris-Win64-Shipping.exe not found — is CE attached to Tekken?")
         return nil
     end
-    local pool1 = readQword(base + OpenLab.POOL1_PTR_OFFSET)
+    local pool1 = readQword(base + OpenDojo.POOL1_PTR_OFFSET)
     if not pool1 or pool1 == 0 then
         log("pool1 is NULL — use practice-mode recording at least once first")
         return nil
@@ -164,13 +171,13 @@ local function get_pool1_base()
 end
 
 local function slot_address(slot_idx)
-    if slot_idx < 0 or slot_idx >= OpenLab.USER_SLOTS then
-        log("invalid slot index %d (must be 0..%d)", slot_idx, OpenLab.USER_SLOTS - 1)
+    if slot_idx < 0 or slot_idx >= OpenDojo.USER_SLOTS then
+        log("invalid slot index %d (must be 0..%d)", slot_idx, OpenDojo.USER_SLOTS - 1)
         return nil
     end
     local pool1 = get_pool1_base()
     if not pool1 then return nil end
-    return pool1 + slot_idx * OpenLab.SLOT_PITCH
+    return pool1 + slot_idx * OpenDojo.SLOT_PITCH
 end
 
 -- ---------------------------------------------------------------------------
@@ -214,7 +221,7 @@ end
 local function drill_path(slot_idx, ext)
     -- File names use 1-based, user-facing slot numbers.
     ext = ext or "drill"
-    return OpenLab.DRILL_DIR .. "\\slot_" .. (slot_idx + 1) .. "." .. ext
+    return OpenDojo.DRILL_DIR .. "\\slot_" .. (slot_idx + 1) .. "." .. ext
 end
 
 -- ---------------------------------------------------------------------------
@@ -328,7 +335,7 @@ local function encode_drill_text(bytes, slot_idx)
         total = total + bytes[3 + i * 4 + 3]
     end
     local lines = {
-        "# OpenLab drill v1",
+        "# OpenDojo drill v1",
         string.format("slot:         %d", slot_idx + 1),
         string.format("events:       %d", event_count),
         string.format("total_frames: %d", total),
@@ -411,7 +418,7 @@ local function decode_drill_text(text)
             events[#events + 1] = ev
         end
     end
-    local max_events = (OpenLab.SLOT_PITCH - 2) // 4
+    local max_events = (OpenDojo.SLOT_PITCH - 2) // 4
     if #events > max_events then
         return nil, string.format("too many events: %d (max %d)", #events, max_events)
     end
@@ -425,27 +432,27 @@ local function decode_drill_text(text)
         data[off + 2] = e[3]
         data[off + 3] = e[4]
     end
-    for i = #data + 1, OpenLab.SLOT_PITCH do data[i] = 0 end
+    for i = #data + 1, OpenDojo.SLOT_PITCH do data[i] = 0 end
     return data
 end
 
 -- Parse the legacy 7218-byte binary container. Returns a byte table of the
 -- 7202-byte payload, or (nil, err).
 local function parse_drill_binary(content)
-    local need = OpenLab.HEADER_SIZE + OpenLab.SLOT_PITCH
+    local need = OpenDojo.HEADER_SIZE + OpenDojo.SLOT_PITCH
     if #content < need then
         return nil, string.format("too small: %d bytes (need %d)", #content, need)
     end
-    if content:sub(1, 4) ~= OpenLab.MAGIC then
+    if content:sub(1, 4) ~= OpenDojo.MAGIC then
         return nil, "bad magic " .. string.format("%q", content:sub(1, 4))
     end
     local version = unpack_le32(content, 5)
-    if version ~= OpenLab.VERSION then
+    if version ~= OpenDojo.VERSION then
         return nil, string.format("unsupported version %d (this is v%d)",
-                                  version, OpenLab.VERSION)
+                                  version, OpenDojo.VERSION)
     end
-    local payload = content:sub(OpenLab.HEADER_SIZE + 1,
-                                OpenLab.HEADER_SIZE + OpenLab.SLOT_PITCH)
+    local payload = content:sub(OpenDojo.HEADER_SIZE + 1,
+                                OpenDojo.HEADER_SIZE + OpenDojo.SLOT_PITCH)
     return string_to_bytes(payload)
 end
 
@@ -457,7 +464,7 @@ local function export_slot(slot_idx)
     local addr = slot_address(slot_idx)
     if not addr then return false end
 
-    local bytes = readBytes(addr, OpenLab.SLOT_PITCH, true)
+    local bytes = readBytes(addr, OpenDojo.SLOT_PITCH, true)
     if not bytes then
         log("readBytes failed at 0x%X", addr)
         return false
@@ -486,8 +493,8 @@ local function export_slot(slot_idx)
         log("open(%q) failed: %s", bin_path, tostring(berr))
         return false
     end
-    fb:write(OpenLab.MAGIC)
-    fb:write(pack_le32(OpenLab.VERSION))
+    fb:write(OpenDojo.MAGIC)
+    fb:write(pack_le32(OpenDojo.VERSION))
     fb:write(pack_le32(slot_idx))
     fb:write(pack_le32(0))
     fb:write(bytes_to_string(bytes))
@@ -507,7 +514,7 @@ local function import_slot(slot_idx)
     if ft then
         local content = ft:read("*all")
         ft:close()
-        if content:sub(1, 4) == OpenLab.MAGIC then
+        if content:sub(1, 4) == OpenDojo.MAGIC then
             -- Legacy binary stored under the .drill extension. Auto-promote on
             -- next export by leaving the new files in place when we write back.
             local payload, perr = parse_drill_binary(content)
@@ -553,19 +560,19 @@ local function import_slot(slot_idx)
 end
 
 local function show_status()
-    log("=== OpenLab status ===")
+    log("=== OpenDojo status ===")
     local base = get_module_base()
     if not base then return end
     log("  module base    = 0x%X", base)
-    log("  pool1 ptr addr = 0x%X", base + OpenLab.POOL1_PTR_OFFSET)
-    local pool1 = readQword(base + OpenLab.POOL1_PTR_OFFSET)
+    log("  pool1 ptr addr = 0x%X", base + OpenDojo.POOL1_PTR_OFFSET)
+    local pool1 = readQword(base + OpenDojo.POOL1_PTR_OFFSET)
     if not pool1 or pool1 == 0 then
         log("  pool1          = NULL (record once first)")
         return
     end
     log("  pool1          = 0x%X", pool1)
-    for i = 0, OpenLab.USER_SLOTS - 1 do
-        local b = readBytes(pool1 + i * OpenLab.SLOT_PITCH, OpenLab.SLOT_PITCH, true)
+    for i = 0, OpenDojo.USER_SLOTS - 1 do
+        local b = readBytes(pool1 + i * OpenDojo.SLOT_PITCH, OpenDojo.SLOT_PITCH, true)
         if b then
             local n = event_count_from_bytes(b)
             log("  slot %d: %s", i + 1,
@@ -586,22 +593,22 @@ end
 
 -- Clean up any pre-existing hotkeys from a previous load of this script
 -- so reloading doesn't stack duplicates.
-if _G.openlab_hotkeys then
-    for _, hk in ipairs(_G.openlab_hotkeys) do
+if _G.opendojo_hotkeys then
+    for _, hk in ipairs(_G.opendojo_hotkeys) do
         local ok = pcall(function() hk.destroy(hk) end)
         if not ok then pcall(function() hk:destroy() end) end
     end
 end
-_G.openlab_hotkeys = {}
+_G.opendojo_hotkeys = {}
 
 local function register_hotkey(callback, ...)
     local ok, hk = pcall(createHotkey, callback, ...)
-    if ok and hk then table.insert(_G.openlab_hotkeys, hk) end
+    if ok and hk then table.insert(_G.opendojo_hotkeys, hk) end
     return ok, hk
 end
 
 local VK_CONTROL = 0x11
-for i = 1, OpenLab.USER_SLOTS do
+for i = 1, OpenDojo.USER_SLOTS do
     local slot_idx = i - 1
     local f_key   = 0x6F + i  -- F1=0x70, ..., F8=0x77
     local num_key = 0x30 + i  -- 1=0x31,  ..., 8=0x38
@@ -611,15 +618,15 @@ end
 register_hotkey(function() show_status() end, 0x78)  -- F9
 
 log("loaded — F1..F8 = export, Ctrl+1..8 = import, F9 = status")
-log("drill files: %s", OpenLab.DRILL_DIR)
-log("call OpenLab_destroy() to release hotkeys without closing CE")
+log("drill files: %s", OpenDojo.DRILL_DIR)
+log("call OpenDojo_destroy() to release hotkeys without closing CE")
 
 -- Round-trip check: read a slot, encode to text, decode back, and compare to
 -- the original bytes. Returns true if they match.
 local function round_trip_check(slot_idx)
     local addr = slot_address(slot_idx)
     if not addr then return false end
-    local original = readBytes(addr, OpenLab.SLOT_PITCH, true)
+    local original = readBytes(addr, OpenDojo.SLOT_PITCH, true)
     if not original then return false end
     local n = event_count_from_bytes(original)
     if n == 0 then
@@ -649,25 +656,25 @@ local function round_trip_check(slot_idx)
 end
 
 -- Make the API accessible from the CE Lua console for manual testing.
-_G.OpenLab = {
+_G.OpenDojo = {
     export_slot       = export_slot,
     import_slot       = import_slot,
     show_status       = show_status,
     round_trip_check  = round_trip_check,
     encode_drill_text = encode_drill_text,
     decode_drill_text = decode_drill_text,
-    config            = OpenLab,
+    config            = OpenDojo,
 }
 
 -- Release all hotkeys (they're global so they'll fire from any focused
 -- window — call this when you want to type freely elsewhere without
 -- triggering exports/imports).
-function _G.OpenLab_destroy()
-    if not _G.openlab_hotkeys then return end
-    for _, hk in ipairs(_G.openlab_hotkeys) do
+function _G.OpenDojo_destroy()
+    if not _G.opendojo_hotkeys then return end
+    for _, hk in ipairs(_G.opendojo_hotkeys) do
         local ok = pcall(function() hk.destroy(hk) end)
         if not ok then pcall(function() hk:destroy() end) end
     end
-    _G.openlab_hotkeys = nil
+    _G.opendojo_hotkeys = nil
     log("hotkeys released")
 end

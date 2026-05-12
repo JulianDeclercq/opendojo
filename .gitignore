@@ -51,7 +51,7 @@ Win32/
 Thumbs.db
 .DS_Store
 
-# OpenLab artifacts — drills are intentionally per-user, snapshots are dev-only
+# OpenDojo artifacts — drills are intentionally per-user, snapshots are dev-only
 *.drill
 *.bin
 snapshots/

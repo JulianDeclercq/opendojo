@@ -14,7 +14,7 @@
 // They're allocated lazily on first practice-mode recording — until then,
 // the pointer reads as 0.
 
-namespace openlab::subsystems {
+namespace opendojo::subsystems {
 
 // Pointer-storage offsets within Polaris's image.
 inline constexpr std::uintptr_t CTX_PTR_OFFSET   = 0x9537300;
@@ -44,4 +44,4 @@ std::uintptr_t lookup(std::uintptr_t key_offset);
 std::uintptr_t pool1();
 std::uintptr_t pool2();
 
-}  // namespace openlab::subsystems
+}  // namespace opendojo::subsystems

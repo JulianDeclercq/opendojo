@@ -6,7 +6,7 @@
 #include <cstring>
 #include <string>
 
-namespace openlab::drill {
+namespace opendojo::drill {
 
 namespace {
 
@@ -214,7 +214,7 @@ std::string encode_text(const std::uint8_t* slot_data, std::size_t slot_idx) {
     out.reserve(512 + std::size_t{event_count} * 32);
 
     char buf[128];
-    out += "# OpenLab drill v1\n";
+    out += "# OpenDojo drill v1\n";
     std::snprintf(buf, sizeof(buf), "slot:         %zu\n", slot_idx + 1);
     out += buf;
     std::snprintf(buf, sizeof(buf), "events:       %u\n",
@@ -419,4 +419,4 @@ BinaryResult decode_binary(std::string_view content) {
     return result;
 }
 
-}  // namespace openlab::drill
+}  // namespace opendojo::drill
