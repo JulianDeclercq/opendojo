@@ -1,0 +1,12 @@
+# Lua/LuaJIT
+*.luac
+
+# Editor swap
+*.swp
+*.swo
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+.DS_Store
