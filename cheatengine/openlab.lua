@@ -211,9 +211,215 @@ local function event_count_from_bytes(bytes)
     return bytes[1] + bytes[2] * 256
 end
 
-local function drill_path(slot_idx)
+local function drill_path(slot_idx, ext)
     -- File names use 1-based, user-facing slot numbers.
-    return OpenLab.DRILL_DIR .. "\\slot_" .. (slot_idx + 1) .. ".drill"
+    ext = ext or "drill"
+    return OpenLab.DRILL_DIR .. "\\slot_" .. (slot_idx + 1) .. "." .. ext
+end
+
+-- ---------------------------------------------------------------------------
+-- Drill text format (v1) — canonical, human-editable.
+--
+-- File shape:
+--   # OpenLab drill v1
+--   slot:         5
+--   events:       9
+--   total_frames: 142
+--
+--   # dir  buttons  frames  [annotations]
+--     n    2          8   mark=3
+--     n    .          2   mark=3
+--     n    .         17
+--     n    3+4        1
+--     ...
+--
+-- Per-event columns (whitespace-separated):
+--   dir      Tekken notation: n f b u d  uf df ub db.
+--            Internally, byte 0 low nibble is a 4-bit direction mask:
+--              bit 0 = up   bit 1 = down   bit 2 = forward   bit 3 = back
+--            yielding n=0, u=1, d=2, f=4, uf=5, df=6, b=8, ub=9, db=10.
+--            Invalid combos (e.g. up+down) are preserved via dir_raw=N.
+--   buttons  1=LP 2=RP 3=LK 4=RK, combined with '+'. '.' means no buttons.
+--   frames   duration in frames at 60fps (sum across all events = drill length).
+--   annotations (optional, key=value):
+--     mark=N      byte 0 high nibble, when not the default 0x2.
+--     btn_raw=NN  bits of byte 1 outside the named 1/2/3/4 set (hex).
+--     aux=NN      byte 2 (auxiliary state, partially decoded), default 0xA0.
+--
+-- '#' starts a comment to end-of-line. Blank lines are ignored. The header
+-- (slot:, events:, total_frames:) is informational — only the event lines
+-- determine the imported recording.
+-- ---------------------------------------------------------------------------
+
+local DEFAULT_MARK = 0x2    -- byte 0 high nibble for typical CPU events
+local DEFAULT_AUX  = 0xA0   -- byte 2 baseline (idle / no animation state)
+
+-- 4-bit direction mask: bit 0 = up, 1 = down, 2 = forward, 3 = back.
+local DIR_TO_TEXT = {
+    [0]  = "n",
+    [1]  = "u",   [2]  = "d",
+    [4]  = "f",   [5]  = "uf",  [6]  = "df",
+    [8]  = "b",   [9]  = "ub",  [10] = "db",
+}
+local TEXT_TO_DIR = {
+    n = 0,
+    u = 1,   d  = 2,
+    f = 4,   uf = 5,   df = 6,
+    b = 8,   ub = 9,   db = 10,
+}
+
+-- Byte 1 bit layout, empirically determined by recording each button alone:
+--   0x40 = 1 (LP)   0x80 = 2 (RP)
+--   0x10 = 3 (LK)   0x20 = 4 (RK)
+-- The bottom nibble (0x01..0x08) shows up rarely (slot_7 ev02 has 0x02 set)
+-- and isn't decoded yet — preserved as btn_raw=NN.
+local BTN_BIT_TO_NUM = { [0x40] = "1", [0x80] = "2", [0x10] = "3", [0x20] = "4" }
+local BTN_NUM_TO_BIT = { ["1"]  = 0x40, ["2"] = 0x80, ["3"] = 0x10, ["4"] = 0x20 }
+
+-- Encode in canonical 1,2,3,4 order regardless of bit order.
+local BTN_EMIT_ORDER = { 0x40, 0x80, 0x10, 0x20 }
+
+local function encode_buttons(byte1)
+    local parts = {}
+    for _, bit in ipairs(BTN_EMIT_ORDER) do
+        if (byte1 & bit) ~= 0 then parts[#parts + 1] = BTN_BIT_TO_NUM[bit] end
+    end
+    return #parts == 0 and "." or table.concat(parts, "+"), byte1 & 0x0F
+end
+
+local function parse_buttons(token)
+    if token == "." then return 0 end
+    local mask = 0
+    for sub in token:gmatch("[^+]+") do
+        local bit = BTN_NUM_TO_BIT[sub]
+        if not bit then return nil, "unknown button token: " .. sub end
+        mask = mask | bit
+    end
+    return mask
+end
+
+local function encode_event_line(b0, b1, b2, b3)
+    local mark = (b0 >> 4) & 0x0F
+    local dir  = b0 & 0x0F
+    local dir_text = DIR_TO_TEXT[dir]
+    local ann = {}
+    if not dir_text then
+        dir_text = "n"
+        ann[#ann + 1] = string.format("dir_raw=%X", dir)
+    end
+    local btn_str, btn_unknown = encode_buttons(b1)
+    if mark ~= DEFAULT_MARK then ann[#ann + 1] = string.format("mark=%X",     mark)        end
+    if btn_unknown ~= 0       then ann[#ann + 1] = string.format("btn_raw=%02X", btn_unknown) end
+    if b2 ~= DEFAULT_AUX      then ann[#ann + 1] = string.format("aux=%02X",   b2)          end
+    local line = string.format("  %-2s   %-5s  %4d", dir_text, btn_str, b3)
+    if #ann > 0 then line = line .. "   " .. table.concat(ann, " ") end
+    return line
+end
+
+local function encode_drill_text(bytes, slot_idx)
+    local event_count = bytes[1] + bytes[2] * 256
+    local total = 0
+    for i = 0, event_count - 1 do
+        total = total + bytes[3 + i * 4 + 3]
+    end
+    local lines = {
+        "# OpenLab drill v1",
+        string.format("slot:         %d", slot_idx + 1),
+        string.format("events:       %d", event_count),
+        string.format("total_frames: %d", total),
+        "",
+        "# dir   buttons  frames   [mark=N | btn_raw=NN | aux=NN | dir_raw=N]",
+    }
+    for i = 0, event_count - 1 do
+        local off = 3 + i * 4
+        lines[#lines + 1] =
+            encode_event_line(bytes[off], bytes[off + 1], bytes[off + 2], bytes[off + 3])
+    end
+    return table.concat(lines, "\n") .. "\n"
+end
+
+local function parse_event_line(stripped)
+    local dir_tok, btn_tok, frame_tok, rest =
+        stripped:match("^(%S+)%s+(%S+)%s+(%S+)%s*(.-)$")
+    if not dir_tok then return nil, "bad event line" end
+    local dir = TEXT_TO_DIR[dir_tok]
+    if not dir then return nil, "unknown direction: " .. dir_tok end
+    local btn_mask, err = parse_buttons(btn_tok)
+    if not btn_mask then return nil, err end
+    local frames = tonumber(frame_tok)
+    if not frames or frames < 0 or frames > 255 then
+        return nil, "bad frame count: " .. frame_tok
+    end
+    local mark, btn_raw, aux, dir_raw = DEFAULT_MARK, 0, DEFAULT_AUX, nil
+    for k, v in (rest or ""):gmatch("([%w_]+)%s*=%s*(%w+)") do
+        local n = tonumber(v, 16)
+        if not n then return nil, "bad annotation value: " .. k .. "=" .. v end
+        if     k == "mark"    then mark    = n
+        elseif k == "btn_raw" then btn_raw = n
+        elseif k == "aux"     then aux     = n
+        elseif k == "dir_raw" then dir_raw = n
+        else return nil, "unknown annotation: " .. k end
+    end
+    if dir_raw then dir = dir_raw end
+    return {
+        ((mark & 0xF) << 4) | (dir & 0xF),
+        btn_mask | btn_raw,
+        aux,
+        frames,
+    }
+end
+
+local function decode_drill_text(text)
+    local events = {}
+    for raw_line in (text .. "\n"):gmatch("([^\r\n]*)\r?\n") do
+        local stripped = raw_line:gsub("#.*$", "")
+                                  :gsub("^%s+", "")
+                                  :gsub("%s+$", "")
+        -- Skip blanks and header lines (key: value).
+        if stripped ~= "" and not stripped:match("^[%w_]+%s*:%s*%S") then
+            local ev, err = parse_event_line(stripped)
+            if not ev then
+                return nil, (err or "parse error") .. " — line: " .. raw_line
+            end
+            events[#events + 1] = ev
+        end
+    end
+    local max_events = (OpenLab.SLOT_PITCH - 2) // 4
+    if #events > max_events then
+        return nil, string.format("too many events: %d (max %d)", #events, max_events)
+    end
+    local data = {}
+    data[1] = #events & 0xFF
+    data[2] = (#events >> 8) & 0xFF
+    for i, e in ipairs(events) do
+        local off = 3 + (i - 1) * 4
+        data[off]     = e[1]
+        data[off + 1] = e[2]
+        data[off + 2] = e[3]
+        data[off + 3] = e[4]
+    end
+    for i = #data + 1, OpenLab.SLOT_PITCH do data[i] = 0 end
+    return data
+end
+
+-- Parse the legacy 7218-byte binary container. Returns a byte table of the
+-- 7202-byte payload, or (nil, err).
+local function parse_drill_binary(content)
+    local need = OpenLab.HEADER_SIZE + OpenLab.SLOT_PITCH
+    if #content < need then
+        return nil, string.format("too small: %d bytes (need %d)", #content, need)
+    end
+    if content:sub(1, 4) ~= OpenLab.MAGIC then
+        return nil, "bad magic " .. string.format("%q", content:sub(1, 4))
+    end
+    local version = unpack_le32(content, 5)
+    if version ~= OpenLab.VERSION then
+        return nil, string.format("unsupported version %d (this is v%d)",
+                                  version, OpenLab.VERSION)
+    end
+    local payload = content:sub(OpenLab.HEADER_SIZE + 1,
+                                OpenLab.HEADER_SIZE + OpenLab.SLOT_PITCH)
+    return string_to_bytes(payload)
 end
 
 -- ---------------------------------------------------------------------------
@@ -235,57 +441,87 @@ local function export_slot(slot_idx)
         return false
     end
 
-    local path = drill_path(slot_idx)
-    local f, err = io.open(path, "wb")
-    if not f then
-        log("open(%q) failed: %s", path, tostring(err))
+    -- Canonical text drill.
+    local text = encode_drill_text(bytes, slot_idx)
+    local text_path = drill_path(slot_idx)
+    local ft, err = io.open(text_path, "wb")
+    if not ft then
+        log("open(%q) failed: %s", text_path, tostring(err))
         return false
     end
-    f:write(OpenLab.MAGIC)
-    f:write(pack_le32(OpenLab.VERSION))
-    f:write(pack_le32(slot_idx))
-    f:write(pack_le32(0))
-    f:write(bytes_to_string(bytes))
-    f:close()
-    log("exported slot %d (%d events) -> %s", slot_idx + 1, n, path)
+    ft:write(text)
+    ft:close()
+
+    -- Binary safety net (byte-clone).
+    local bin_path = drill_path(slot_idx, "bin")
+    local fb, berr = io.open(bin_path, "wb")
+    if not fb then
+        log("open(%q) failed: %s", bin_path, tostring(berr))
+        return false
+    end
+    fb:write(OpenLab.MAGIC)
+    fb:write(pack_le32(OpenLab.VERSION))
+    fb:write(pack_le32(slot_idx))
+    fb:write(pack_le32(0))
+    fb:write(bytes_to_string(bytes))
+    fb:close()
+
+    log("exported slot %d (%d events) -> slot_%d.drill + slot_%d.bin",
+        slot_idx + 1, n, slot_idx + 1, slot_idx + 1)
     return true
 end
 
 local function import_slot(slot_idx)
-    local path = drill_path(slot_idx)
-    local f, err = io.open(path, "rb")
-    if not f then
-        log("open(%q) failed: %s", path, tostring(err))
-        return false
-    end
-    local content = f:read("*all")
-    f:close()
+    local text_path = drill_path(slot_idx)
+    local bin_path  = drill_path(slot_idx, "bin")
+    local data, source
 
-    local need = OpenLab.HEADER_SIZE + OpenLab.SLOT_PITCH
-    if #content < need then
-        log("%s too small: %d bytes (need %d)", path, #content, need)
-        return false
-    end
-    if content:sub(1, 4) ~= OpenLab.MAGIC then
-        log("%s: bad magic %q", path, content:sub(1, 4))
-        return false
-    end
-    local version = unpack_le32(content, 5)
-    if version ~= OpenLab.VERSION then
-        log("%s: unsupported version %d (this is v%d)", path, version, OpenLab.VERSION)
-        return false
+    local ft = io.open(text_path, "rb")
+    if ft then
+        local content = ft:read("*all")
+        ft:close()
+        if content:sub(1, 4) == OpenLab.MAGIC then
+            -- Legacy binary stored under the .drill extension. Auto-promote on
+            -- next export by leaving the new files in place when we write back.
+            local payload, perr = parse_drill_binary(content)
+            if not payload then
+                log("%s (legacy binary): %s", text_path, perr)
+                return false
+            end
+            data, source = payload, text_path .. " (legacy binary)"
+        else
+            local decoded, derr = decode_drill_text(content)
+            if not decoded then
+                log("%s: %s", text_path, derr)
+                return false
+            end
+            data, source = decoded, text_path
+        end
+    else
+        local fb = io.open(bin_path, "rb")
+        if not fb then
+            log("neither %s nor %s found", text_path, bin_path)
+            return false
+        end
+        local content = fb:read("*all")
+        fb:close()
+        local payload, perr = parse_drill_binary(content)
+        if not payload then
+            log("%s: %s", bin_path, perr)
+            return false
+        end
+        data, source = payload, bin_path
     end
 
-    local data = content:sub(OpenLab.HEADER_SIZE + 1, OpenLab.HEADER_SIZE + OpenLab.SLOT_PITCH)
     local addr = slot_address(slot_idx)
     if not addr then return false end
-
-    writeBytes(addr, string_to_bytes(data))
+    writeBytes(addr, data)
     if not set_recorded_flags(slot_idx, true) then
         log("WARNING: pool1 written but flags not set — menu may show 'Not Set'")
     end
+    local event_count = data[1] + data[2] * 256
     log("imported %s -> slot %d (%d events). Close+reopen the practice menu to see the update.",
-        path, slot_idx + 1, data:byte(1) + data:byte(2) * 256)
+        source, slot_idx + 1, event_count)
     return true
 end
 
@@ -351,12 +587,49 @@ log("loaded — F1..F8 = export, Ctrl+1..8 = import, F9 = status")
 log("drill files: %s", OpenLab.DRILL_DIR)
 log("call OpenLab_destroy() to release hotkeys without closing CE")
 
+-- Round-trip check: read a slot, encode to text, decode back, and compare to
+-- the original bytes. Returns true if they match.
+local function round_trip_check(slot_idx)
+    local addr = slot_address(slot_idx)
+    if not addr then return false end
+    local original = readBytes(addr, OpenLab.SLOT_PITCH, true)
+    if not original then return false end
+    local n = event_count_from_bytes(original)
+    if n == 0 then
+        log("slot %d is empty — nothing to check", slot_idx + 1)
+        return false
+    end
+    local text = encode_drill_text(original, slot_idx)
+    local decoded, err = decode_drill_text(text)
+    if not decoded then
+        log("round-trip decode failed: %s", err)
+        return false
+    end
+    -- Compare only the meaningful prefix (event count header + N event records).
+    -- The trailing pad is zeros in both — we don't require those to match if the
+    -- original had any pre-zero garbage past the events (the game shouldn't).
+    local meaningful = 2 + n * 4
+    for i = 1, meaningful do
+        if original[i] ~= decoded[i] then
+            log("round-trip MISMATCH at byte %d: original=0x%02X decoded=0x%02X",
+                i - 1, original[i], decoded[i])
+            return false
+        end
+    end
+    log("round-trip OK for slot %d (%d events, %d bytes compared)",
+        slot_idx + 1, n, meaningful)
+    return true
+end
+
 -- Make the API accessible from the CE Lua console for manual testing.
 _G.OpenLab = {
-    export_slot = export_slot,
-    import_slot = import_slot,
-    show_status = show_status,
-    config      = OpenLab,
+    export_slot       = export_slot,
+    import_slot       = import_slot,
+    show_status       = show_status,
+    round_trip_check  = round_trip_check,
+    encode_drill_text = encode_drill_text,
+    decode_drill_text = decode_drill_text,
+    config            = OpenLab,
 }
 
 -- Release all hotkeys (they're global so they'll fire from any focused
