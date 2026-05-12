@@ -7,9 +7,9 @@
 -- export/import will succeed.
 --
 -- Hotkeys (global; work regardless of which window has focus):
---   F1..F8   export current contents of user slot N to slot_N.drill
---   1..8     import slot_N.drill into user slot N (number-row keys)
---   F9       print status (module base, pool address, per-slot counts)
+--   F1..F8        export current contents of user slot N to slot_N.drill
+--   Ctrl+1..8     import slot_N.drill into user slot N
+--   F9            print status (module base, pool address, per-slot counts)
 --
 -- Edit DRILL_DIR below to point at your local clone of the openlab repo.
 
@@ -32,25 +32,32 @@ local OpenLab = {
     KEY_SUBB         = 0x953707C,
     KEY_SUBC         = 0x9537080,
 
-    -- Persistent "at least one slot has a recording" flags. Empirically
-    -- identified via clean/recorded diff. Writing pool1 alone is not enough —
-    -- if these flags aren't set, the menu shows "Not Set" and the in-battle
-    -- Select+B trigger refuses to play. They're global (not per-slot): one
-    -- slot recorded is enough to flip them all.
-    --   gameplay  +0x484 : byte    0x00 (clean) / 0x02 (recorded) — REQUIRED
-    --   subB      +0x65  : byte    0x01 (clean) / 0x00 (recorded) — REQUIRED
-    --   singleton +0x8   : byte    0x00 (clean) / 0x01 (recorded) — drifts
-    --   subC      +0x25C : int32  -1    (clean) / +1   (recorded) — drifts
-    -- The latter two drift back to "clean" on their own (the game's tick
-    -- handler appears to update them based on active record/playback mode,
-    -- not on pool1 contents). They aren't required for the menu or playback,
-    -- but we still write them on import — harmless reinforcement.
+    -- "Recorded" flags. Empirically identified via clean/recorded diffs.
+    --
+    -- gameplay has a per-slot array: 8 bytes per slot, starting at +0x480.
+    --   Entry N (zero-indexed slot N) lives at gameplay + 0x480 + N*8:
+    --     +0 .. +3 : uint32 = 1   (constant — "slot allocated")
+    --     +4 .. +7 : uint32 = 0 (empty) / 2 (recorded)
+    --   The game's tick handler maintains this array from pool1 contents —
+    --   if you write pool1[N] but flip the wrong slot's flag, the tick
+    --   handler immediately resets your write *and* writes the correct
+    --   slot's flag — so always write the correct one.
+    --
+    -- The other three (singleton +0x8, subB +0x65, subC +0x25C) appear to
+    -- be global "any slot recorded" indicators. We still write them on
+    -- import; they're harmless reinforcement and may matter on first-record
+    -- transitions out of a fully-clean state.
     --
     -- Other notes:
-    --   - Closing/reopening the practice menu is required for the display to
-    --     refresh. The slot data and playback are immediately correct.
+    --   - Closing/reopening the practice menu is required for the display
+    --     to refresh. The slot data and playback are immediately correct.
     --   - On a fresh game launch with no practice activity, the pool isn't
     --     allocated yet — import_slot will report and bail.
+
+    -- Per-slot gameplay flag layout.
+    GAMEPLAY_SLOT_BASE   = 0x480,   -- start of 8-slot array
+    GAMEPLAY_SLOT_STRIDE = 0x08,    -- bytes per per-slot entry
+    GAMEPLAY_SLOT_FLAG   = 0x04,    -- offset within entry of the recorded flag
 }
 
 -- ---------------------------------------------------------------------------
@@ -112,9 +119,10 @@ local function get_subsys(name, key)
     return addr
 end
 
--- Sets (or clears) the four global "at least one slot has a recording" flags.
+-- Sets the per-slot "recorded" flag in the gameplay array and the three
+-- global "any slot recorded" indicators. `slot_idx` is 0..7.
 -- Returns true on success, false if any subsystem couldn't be resolved.
-local function set_recorded_flags(recorded)
+local function set_recorded_flags(slot_idx, recorded)
     local gameplay  = get_subsys("gameplay",  OpenLab.KEY_GAMEPLAY)
     local singleton = get_subsys("singleton", OpenLab.KEY_SINGLETON)
     local subB      = get_subsys("subB",      OpenLab.KEY_SUBB)
@@ -124,13 +132,16 @@ local function set_recorded_flags(recorded)
             tostring(gameplay), tostring(singleton), tostring(subB), tostring(subC))
         return false
     end
+    local slot_flag_addr = gameplay + OpenLab.GAMEPLAY_SLOT_BASE
+                                    + slot_idx * OpenLab.GAMEPLAY_SLOT_STRIDE
+                                    + OpenLab.GAMEPLAY_SLOT_FLAG
     if recorded then
-        writeBytes(gameplay  + 0x484, 0x02)
+        writeInteger(slot_flag_addr,     2)
         writeBytes(singleton + 0x008, 0x01)
         writeBytes(subB      + 0x065, 0x00)
         writeInteger(subC    + 0x25C,    1)
     else
-        writeBytes(gameplay  + 0x484, 0x00)
+        writeInteger(slot_flag_addr,     0)
         writeBytes(singleton + 0x008, 0x00)
         writeBytes(subB      + 0x065, 0x01)
         writeInteger(subC    + 0x25C,   -1)
@@ -270,7 +281,7 @@ local function import_slot(slot_idx)
     if not addr then return false end
 
     writeBytes(addr, string_to_bytes(data))
-    if not set_recorded_flags(true) then
+    if not set_recorded_flags(slot_idx, true) then
         log("WARNING: pool1 written but flags not set — menu may show 'Not Set'")
     end
     log("imported %s -> slot %d (%d events). Close+reopen the practice menu to see the update.",
@@ -305,6 +316,7 @@ end
 --
 -- CE's createHotkey takes (callback, keycode, [keycode...]). Modifier keys
 -- come first. Virtual key codes:
+--   VK_CONTROL    = 0x11 (left or right Ctrl)
 --   VK_1..8       = 0x31..0x38 (number-row digit keys)
 --   VK_F1..F12    = 0x70..0x7B
 -- ---------------------------------------------------------------------------
@@ -325,16 +337,17 @@ local function register_hotkey(callback, ...)
     return ok, hk
 end
 
+local VK_CONTROL = 0x11
 for i = 1, OpenLab.USER_SLOTS do
     local slot_idx = i - 1
     local f_key   = 0x6F + i  -- F1=0x70, ..., F8=0x77
     local num_key = 0x30 + i  -- 1=0x31,  ..., 8=0x38
     register_hotkey(function() export_slot(slot_idx) end, f_key)
-    register_hotkey(function() import_slot(slot_idx) end, num_key)
+    register_hotkey(function() import_slot(slot_idx) end, VK_CONTROL, num_key)
 end
 register_hotkey(function() show_status() end, 0x78)  -- F9
 
-log("loaded — F1..F8 = export, 1..8 = import, F9 = status")
+log("loaded — F1..F8 = export, Ctrl+1..8 = import, F9 = status")
 log("drill files: %s", OpenLab.DRILL_DIR)
 log("call OpenLab_destroy() to release hotkeys without closing CE")
 
@@ -346,8 +359,9 @@ _G.OpenLab = {
     config      = OpenLab,
 }
 
--- Release all hotkeys (number-row imports are global so they'll fire from
--- any focused window — call this when you want to type freely elsewhere).
+-- Release all hotkeys (they're global so they'll fire from any focused
+-- window — call this when you want to type freely elsewhere without
+-- triggering exports/imports).
 function _G.OpenLab_destroy()
     if not _G.openlab_hotkeys then return end
     for _, hk in ipairs(_G.openlab_hotkeys) do
