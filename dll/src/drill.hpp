@@ -6,55 +6,58 @@
 #include <string_view>
 #include <vector>
 
-// Drill format encoders/decoders. Two representations:
+// v2 drill format. One file = one drill = N recordings (N >= 1). A "single
+// recording" is the N=1 case — same format, same parser. Multi-recording
+// drills enable shareable scenarios like "Jin string defense" with several
+// related recordings grouped together.
 //
-//   - Text (v1, canonical, human-editable). Matches what the CE Lua emits
-//     today, so .drill files round-trip between the Lua and DLL paths.
-//   - Binary (legacy "OLAB" container, byte-clone of the slot payload).
-//     Kept as a safety net so corrupted text drills can still be played.
-//
-// All functions operate on the 7202-byte slot payload (the same bytes that
-// live in pool1[slot_idx]). Reading a slot is a separate concern handled
-// by opendojo::slot::read().
+// Encoder produces text. Decoder reads text. The byte-for-byte slot payload
+// (7202 bytes per recording) is unchanged from v1; only the surrounding
+// container layout differs. Event line format (dir / buttons / frames /
+// meta=NNNN) is identical to v1 — all existing event encoding logic is
+// reused at the recording level.
 
 namespace opendojo::drill {
 
-inline constexpr std::size_t SLOT_PITCH = 0x1C22;  // = opendojo::slot::SLOT_PITCH
+inline constexpr std::size_t SLOT_PITCH = 0x1C22;  // mirrors opendojo::slot::SLOT_PITCH
 
-// Legacy binary container layout (16-byte header + 7202 bytes = 7218 total).
-inline constexpr char         BINARY_MAGIC[4] = {'O','L','A','B'};
-inline constexpr std::uint32_t BINARY_VERSION = 1;
-inline constexpr std::size_t   BINARY_HEADER  = 0x10;
-inline constexpr std::size_t   BINARY_SIZE    = BINARY_HEADER + SLOT_PITCH;
-
-// --- Text format ----------------------------------------------------------
-
-// Encode 7202 bytes into the v1 text DSL. slot_idx is 0-based and only used
-// for the `slot:` header line; the actual slot location is the caller's
-// concern.
-std::string encode_text(const std::uint8_t* slot_data, std::size_t slot_idx);
-
-// Decode a text drill. On success, `data` is exactly SLOT_PITCH bytes and
-// `error` is empty. On failure, `data` is empty and `error` describes why.
-// Accepts both the v1 packed `meta=NNNN` and the legacy individual
-// `mark=`/`btn_raw=`/`aux=` annotations.
-struct TextResult {
-    std::vector<std::uint8_t> data;
-    std::string               error;
+struct Recording {
+    std::string                name;          // human-readable; "" => unnamed
+    std::uint16_t              event_count  = 0;
+    std::uint32_t              total_frames = 0;
+    std::vector<std::uint8_t>  slot_bytes;    // exactly SLOT_PITCH bytes
 };
+
+struct Drill {
+    std::string             name;            // human-readable drill name
+    std::string             description;     // single-line free-form
+    std::string             character;       // lowercase id; "unknown" if unset
+    std::vector<Recording>  recordings;
+};
+
+// Encode a drill to v2 text. Always emits the full structure even if N==1.
+std::string encode_text(const Drill& d);
+
+struct TextResult {
+    Drill        drill;
+    std::string  error;   // empty on success
+};
+
+// Decode v2 text. On error, `drill.recordings` is empty and `error` describes
+// why. v1 files are NOT accepted — the magic header line discriminates.
 TextResult decode_text(std::string_view text);
 
-// --- Binary format --------------------------------------------------------
+// Build a Recording from raw 7202-byte slot payload (the same bytes returned
+// by opendojo::slot::read). Populates event_count and total_frames from the
+// payload's leading uint16 + per-event frame field. `name` is stored as-is.
+Recording make_recording(std::string name, const std::uint8_t* slot_bytes);
 
-// Wrap 7202 bytes in the OLAB binary container.
-std::vector<std::uint8_t> encode_binary(const std::uint8_t* slot_data,
-                                        std::size_t          slot_idx);
-
-// Strip the binary container. Same result convention as decode_text.
-struct BinaryResult {
-    std::vector<std::uint8_t> data;
-    std::string               error;
-};
-BinaryResult decode_binary(std::string_view content);
+// Convert a drill / recording name to a filesystem-safe lowercase slug.
+// Non-alphanumeric runs collapse to a single underscore; leading/trailing
+// underscores are trimmed; empty input returns "drill".
+//   "Jin String Defense"  -> "jin_string_defense"
+//   "ff+3   sweep!"       -> "ff_3_sweep"
+//   ""                    -> "drill"
+std::string slugify(std::string_view name);
 
 }  // namespace opendojo::drill
