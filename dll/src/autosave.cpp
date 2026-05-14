@@ -48,9 +48,10 @@ struct State {
 };
 State g_s;
 
-constexpr int MAX_FAILURES       = 3;     // give up after this many load_drill !ok
-constexpr int RETRY_INTERVAL     = 60;    // poll once per second between retries
-constexpr int EXIT_GRACE_FRAMES  = 5;     // keep ticking briefly after leaving practice
+constexpr int MAX_FAILURES         = 3;     // give up after this many load_drill !ok
+constexpr int RETRY_INTERVAL       = 60;    // poll once per second between retries
+constexpr int EXIT_GRACE_FRAMES    = 5;     // keep ticking briefly after leaving practice
+constexpr int ENTRY_SETTLE_FRAMES  = 60;    // wait ~1s after entering practice before first autoload attempt
 
 std::filesystem::path autosave_path(std::string_view character) {
     // Character names are pure ASCII (lowercase a-z + digits + underscore)
@@ -262,10 +263,17 @@ void tick() {
     }
 
     // Queue a load when we enter practice or switch to a new character.
+    // Settle delay: when we just entered practice from outside (the
+    // detected=false→true case), wait a beat before the first load
+    // attempt. The game's own practice-mode init runs in the few frames
+    // after KEY_GAMEPLAY appears; if we autoload too early our state
+    // writes get clobbered by the game's setup pass — the in-game UI
+    // then never shows the recordings even though pool1 is correct.
+    // Within-practice character switches don't need the delay.
     if (changed && cpu.detected) {
         g_s.pending_load = cpu.character_name;
         g_s.failures           = 0;
-        g_s.frames_until_retry = 0;
+        g_s.frames_until_retry = g_s.prev_detected ? 0 : ENTRY_SETTLE_FRAMES;
     }
 
     // Retry pending load at a flat one-per-second cadence. pool1-not-yet-

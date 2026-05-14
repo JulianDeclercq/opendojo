@@ -24,6 +24,7 @@ inline constexpr std::uintptr_t POOL2_PTR_OFFSET = 0x986AC78;
 // Subsystem key offsets (each names a 4-byte hash key for the locator).
 inline constexpr std::uintptr_t KEY_GAMEPLAY  = 0x9537314;
 inline constexpr std::uintptr_t KEY_SINGLETON = 0x95371B0;
+inline constexpr std::uintptr_t KEY_RECORDING = 0x95371A4;   // the `this` that pool_init expects naturally
 inline constexpr std::uintptr_t KEY_SUBB      = 0x953707C;
 inline constexpr std::uintptr_t KEY_SUBC      = 0x9537080;
 inline constexpr std::uintptr_t KEY_SUBD      = 0x9537084;

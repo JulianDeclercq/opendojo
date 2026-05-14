@@ -7,15 +7,21 @@
 
 namespace {
 
-// Polaris-side function that allocates pool1 and pool2 if missing, then
-// zero-fills them. Calling convention: x64 fastcall, single `this`
-// argument in RCX. The function dereferences `this+0x24` and writes
-// zero there — we satisfy that by passing a stack-local sacrificial
-// buffer. Found by AOB-scanning .text for the unique MOV [pool1_slot],
-// rax instruction and walking back to the function start.
+// Polaris-side recording-subsystem setup, mirrored from the natural
+// caller FUN_141913f00. All three take the recording subsystem (resolved
+// via KEY_RECORDING) as their first arg.
+//
+//   pool_init   (FUN_1418e8e00)  — writes [recording+0x24]=0, alloc pool1+pool2 if null, memset
+//   post_init   (FUN_1418eb3e0)  — writes recording[0x64]=side, recording[0x5c or 0x60]=idx
+//
+// The natural caller also runs FUN_1418ec330 (pre_clear) before pool_init,
+// but that function is gated on `pool1 != 0` — on a first-ever record
+// the gate is false and the call is a no-op, so we skip it.
 constexpr std::uintptr_t POOL_INIT_RVA = 0x18E8E00;
+constexpr std::uintptr_t POST_INIT_RVA = 0x18EB3E0;
 
 using PoolInitFn = void(*)(void* this_ptr);
+using PostInitFn = void(*)(void* this_ptr, char side, std::uint32_t idx);
 
 }  // anonymous namespace
 
@@ -64,16 +70,32 @@ void opendojo::subsystems::ensure_pool_allocated() {
     auto base = memory::polaris_base();
     if (!base) return;
 
-    // The init function writes 0 to *(this_ptr + 0x24). 64 bytes is more
-    // than enough and naturally aligned to 8.
-    alignas(8) std::uint8_t dummy[64] = {};
+    // Pass the real recording subsystem as `this` (not a stack dummy) so
+    // pool_init's `[this+0x24] = 0` clear lands on the right object, and
+    // call post_init afterward to write the recording-side state that the
+    // in-game UI checks. Without these, pool1 has correct bytes but the
+    // in-game playback UI never reflects them on a fresh process — the
+    // game's first-record flow is what normally sets up this state, and
+    // we have to mirror it.
+    auto recording = lookup(KEY_RECORDING);
+    if (!recording) {
+        OPENDOJO_LOG("subsystems: KEY_RECORDING unresolved — skipping forced alloc");
+        return;
+    }
 
-    auto fn = reinterpret_cast<PoolInitFn>(base + POOL_INIT_RVA);
-    fn(dummy);
+    auto pool_init = reinterpret_cast<PoolInitFn>(base + POOL_INIT_RVA);
+    auto post_init = reinterpret_cast<PostInitFn>(base + POST_INIT_RVA);
+
+    pool_init(reinterpret_cast<void*>(recording));
+    // side=0 (P1), idx=0 — safe defaults. The natural caller computes idx
+    // from the active gameplay slot, but for pool allocation alone, any
+    // valid pair is fine.
+    post_init(reinterpret_cast<void*>(recording), 0, 0);
 
     auto p1 = memory::read_u64(memory::polaris(POOL1_PTR_OFFSET));
     auto p2 = memory::read_u64(memory::polaris(POOL2_PTR_OFFSET));
-    OPENDOJO_LOG("subsystems: force-allocated pool1=0x%llX pool2=0x%llX",
+    OPENDOJO_LOG("subsystems: force-allocated pool1=0x%llX pool2=0x%llX (recording=0x%llX)",
                  static_cast<unsigned long long>(p1),
-                 static_cast<unsigned long long>(p2));
+                 static_cast<unsigned long long>(p2),
+                 static_cast<unsigned long long>(recording));
 }
