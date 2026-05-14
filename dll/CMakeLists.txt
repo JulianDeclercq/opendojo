@@ -101,6 +101,7 @@ endif()
 # ---------------------------------------------------------------------------
 add_library(opendojo SHARED
     src/main.cpp
+    src/autosave.cpp
     src/commands.cpp
     src/drill.cpp
     src/hotkeys.cpp

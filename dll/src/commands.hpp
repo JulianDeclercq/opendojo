@@ -15,6 +15,10 @@
 
 namespace opendojo::commands {
 
+// Absolute path of the opendojo_drills/ directory next to the game exe.
+// Returned for every call — no caching, in case the game gets moved.
+std::filesystem::path drills_dir();
+
 // One drill on disk, summarized from its header lines. Cheap to populate —
 // the menu uses this to list available drills without parsing event data.
 struct DrillHeader {

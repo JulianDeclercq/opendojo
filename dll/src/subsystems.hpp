@@ -38,10 +38,18 @@ inline constexpr std::uintptr_t KEY_SUBD      = 0x9537084;
 // the point of use — never cache the returned pointer across calls.
 std::uintptr_t lookup(std::uintptr_t key_offset);
 
-// Recording-buffer pool bases. 0 until the game allocates them — pool1
-// in particular needs at least one practice-mode recording session per
-// game launch before it becomes non-null.
+// Recording-buffer pool bases. 0 until the game allocates them. Naturally
+// the game allocates both on the user's first practice recording per
+// session via the function at Polaris+0x18E8E00; once allocated they
+// persist for the process lifetime.
 std::uintptr_t pool1();
 std::uintptr_t pool2();
+
+// Force-allocate pool1 and pool2 by calling the same Polaris-side init
+// function the game runs on first record. No-op once both pools are
+// non-null. Caller is responsible for gating to a sane moment — we only
+// invoke this from inside the practice-mode gate so we never touch
+// allocation in other game modes. See feedback_opendojo_practice_gate.
+void ensure_pool_allocated();
 
 }  // namespace opendojo::subsystems

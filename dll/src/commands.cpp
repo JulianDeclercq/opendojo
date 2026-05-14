@@ -22,8 +22,6 @@
 
 namespace opendojo::commands {
 
-namespace {
-
 std::filesystem::path drills_dir() {
     wchar_t buf[MAX_PATH];
     DWORD n = GetModuleFileNameW(nullptr, buf, MAX_PATH);
@@ -32,6 +30,8 @@ std::filesystem::path drills_dir() {
         : std::filesystem::path(L".");
     return root / L"opendojo_drills";
 }
+
+namespace {
 
 bool ensure_drills_dir() {
     std::error_code ec;

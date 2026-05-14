@@ -16,6 +16,7 @@
 
 #include "MinHook.h"
 
+#include "autosave.hpp"
 #include "log.hpp"
 #include "menu.hpp"
 #include "theme.hpp"
@@ -409,6 +410,10 @@ HRESULT STDMETHODCALLTYPE hook_present(
         }
         last_f12 = curr;
     }
+
+    // Autosave runs every frame regardless of menu visibility — it watches
+    // for character/scene transitions and snapshots pool1 accordingly.
+    opendojo::autosave::tick();
 
     if (!g_menu_visible.load()) {
         return g_present_orig(self, sync_interval, flags);

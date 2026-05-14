@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include "autosave.hpp"
 #include "commands.hpp"
 #include "log.hpp"
 #include "players.hpp"
@@ -240,6 +241,20 @@ void draw_status_tab() {
                                static_cast<unsigned long long>(p1));
     else    ImGui::TextColored(ImVec4(1, 0.7f, 0.3f, 1),
                                "not allocated — record once in practice mode");
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    {
+        bool en = opendojo::autosave::is_enabled();
+        if (ImGui::Checkbox("Autosave/autoload per character", &en)) {
+            opendojo::autosave::set_enabled(en);
+        }
+        ImGui::TextDisabled(
+            "Saves your slot contents per CPU character when you switch chars or\n"
+            "leave practice. Restores them when you load that character again.");
+    }
 
     ImGui::Spacing();
     ImGui::Separator();
