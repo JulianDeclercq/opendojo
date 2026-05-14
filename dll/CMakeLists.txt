@@ -107,6 +107,7 @@ add_library(opendojo SHARED
     src/log.cpp
     src/memory.cpp
     src/menu.cpp
+    src/players.cpp
     src/render_hook.cpp
     src/slot.cpp
     src/subsystems.cpp

@@ -338,6 +338,10 @@ std::string encode_text(const Drill& d) {
     std::snprintf(buf, sizeof(buf), "description:  %s\n", d.description.c_str());            out += buf;
     std::snprintf(buf, sizeof(buf), "character:    %s\n", d.character.empty() ? "unknown" : d.character.c_str());
     out += buf;
+    if (!d.cpu_side.empty()) {
+        std::snprintf(buf, sizeof(buf), "cpu_side:     %s\n", d.cpu_side.c_str());
+        out += buf;
+    }
     std::snprintf(buf, sizeof(buf), "recordings:   %zu\n", d.recordings.size());             out += buf;
     out +=
         "#\n"
@@ -448,6 +452,7 @@ TextResult decode_text(std::string_view text) {
             if      (key == "name")        result.drill.name        = std::string(val);
             else if (key == "description") result.drill.description = std::string(val);
             else if (key == "character")   result.drill.character   = std::string(val);
+            else if (key == "cpu_side")    result.drill.cpu_side    = std::string(val);
             else if (key == "recordings")  { /* informational only — count comes from data */ }
             else {
                 result.error = "unknown drill header key: ";

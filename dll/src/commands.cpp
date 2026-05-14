@@ -16,6 +16,7 @@
 #include "drill.hpp"
 #include "log.hpp"
 #include "memory.hpp"
+#include "players.hpp"
 #include "slot.hpp"
 #include "subsystems.hpp"
 
@@ -89,6 +90,7 @@ bool parse_header_only(const std::filesystem::path& path, DrillHeader& out) {
         if      (key == "name")        out.name = val;
         else if (key == "description") out.description = val;
         else if (key == "character")   out.character = val;
+        else if (key == "cpu_side")    out.cpu_side = val;
         else if (key == "recordings")  {
             try { out.recording_count = static_cast<std::size_t>(std::stoul(val)); }
             catch (...) { out.recording_count = 0; }
@@ -230,7 +232,8 @@ LoadResult load_drill(const std::filesystem::path& path, LoadMode mode) {
 
 ExportResult export_current_slots(std::string_view drill_name,
                                   std::string_view description,
-                                  std::string_view character) {
+                                  std::string_view character,
+                                  std::string_view cpu_side) {
     ExportResult r;
 
     if (!opendojo::subsystems::pool1()) {
@@ -242,10 +245,25 @@ ExportResult export_current_slots(std::string_view drill_name,
         return r;
     }
 
+    // Auto-detect from the live game state and let any explicit caller
+    // override. detect_cpu() returns detected=false outside a match.
+    auto cpu = opendojo::players::detect_cpu();
+
     opendojo::drill::Drill d;
     d.name        = drill_name.empty() ? timestamp_name() : std::string(drill_name);
     d.description = std::string(description);
-    d.character   = character.empty() ? "unknown" : std::string(character);
+    if (!character.empty()) {
+        d.character = std::string(character);
+    } else if (cpu.detected) {
+        d.character = cpu.character_name;
+    } else {
+        d.character = "unknown";
+    }
+    if (!cpu_side.empty()) {
+        d.cpu_side = std::string(cpu_side);
+    } else if (cpu.detected) {
+        d.cpu_side = opendojo::players::side_to_string(cpu.cpu_side);
+    }
 
     for (std::size_t i = 0; i < opendojo::slot::USER_SLOTS; ++i) {
         if (opendojo::slot::event_count(i) == 0) continue;
@@ -290,6 +308,19 @@ void show_status() {
     OPENDOJO_LOG("  pool1        = 0x%llX %s",
                 static_cast<unsigned long long>(p1),
                 p1 ? "" : "(NULL — record once in practice mode)");
+
+    // Log all resolved subsystem addresses — used to find character ID offsets.
+    struct { const char* name; std::uintptr_t key; } subsys[] = {
+        { "gameplay",  opendojo::subsystems::KEY_GAMEPLAY  },
+        { "singleton", opendojo::subsystems::KEY_SINGLETON },
+        { "subB",      opendojo::subsystems::KEY_SUBB      },
+        { "subC",      opendojo::subsystems::KEY_SUBC      },
+        { "subD",      opendojo::subsystems::KEY_SUBD      },
+    };
+    for (auto& s : subsys) {
+        auto addr = opendojo::subsystems::lookup(s.key);
+        OPENDOJO_LOG("  %-9s = 0x%llX", s.name, static_cast<unsigned long long>(addr));
+    }
 
     if (p1) {
         for (std::size_t i = 0; i < opendojo::slot::USER_SLOTS; ++i) {

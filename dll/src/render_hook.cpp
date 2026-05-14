@@ -359,14 +359,6 @@ void STDMETHODCALLTYPE hook_execute_command_lists(
             OPENDOJO_LOG("render_hook: captured command queue 0x%p", g_queue);
         }
     }
-    // Periodic heartbeat: confirms the exec hook keeps firing (i.e. the
-    // game is still rendering). If logs stop after a few of these, the
-    // crash happens around then.
-    static std::atomic<unsigned> exec_count{0};
-    const unsigned n = exec_count.fetch_add(1) + 1;
-    if ((n & 0xFF) == 0) {
-        OPENDOJO_LOG("render_hook: exec heartbeat %u", n);
-    }
     g_exec_orig(self, num, lists);
 }
 

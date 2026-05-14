@@ -1,0 +1,147 @@
+## Important Info
+
+### Character Abbreviations
+AML - Jun
+ANT - Jin
+BBN - Raven
+BEE - Heihachi
+BSN - Steve
+CAT - Azucena
+CCN - Jack-8
+CHT - Bryan
+CML - Yoshimitsu
+CRW - Zafina
+CTR - Claudio
+DEK - Practice Dummy
+DER - Asuka
+GHP - Leo
+GOT - Azazel
+GRF - Paul
+GRL - Kazuya
+HMS - Lili
+HRS - Shaheen
+JLY - Leroy
+KAL - Nina
+KLW - Feng
+KMD - Dragunov
+LON - Victor
+LZD - Lars
+MNT - Alisa
+OMK - Clive
+PGN - King
+PIG - Law
+RAT - Xiayou
+RBT - Kuma
+SNK - Hwoarang
+SWL - Devil Jin
+TTR - Panda
+WLF - Lee
+XXA - Angel Jin
+XXB - True Devil Kazuya
+ZBR - Reina
+### Character IDs
+00 = Paul
+01 = Marshall Law
+02 = King
+03 = Yoshimitsu
+04 = Howarang
+05 = Xiaoyu
+06 = Jin
+07 = Bryan
+08 = Kazuya
+09 = Steve
+10 = Jack-8
+11 = Asuka
+12 = Devil Jin
+13 = Feng
+14 = Lili
+15 = Dragunov
+16 = Leo
+17 = Lars
+18 = Alisa
+19 = Claudio
+20 = Shaheen
+21 = Nina
+22 = Lee
+23 = Kuma
+24 = Panda
+25 = Zafina
+26 = Leeroy
+27 = Jun
+28 = Reina
+29 = Azucena
+30 = Victor
+31 = Raven
+32 = Azazel
+33 = Eddy
+34 = Lidia
+35 = Heihachi
+36 = Clive
+37 = Anna
+38 = Fahkumram
+39 = Armor King
+40 = Miary Zo
+116 = Practice Dummy
+117 = Angel Jin
+118 = True Devil Kazuya
+119 = Jack-7
+120 = Soldier
+121 = Devil Jin (story)
+122 = Tekken Monk
+123 = Seiryu
+### Common Item Abbreviatons
+ACC - Accessory
+BDF - Full Body
+BDU - Upper Body
+BTM - Lower Body
+EX? - Extra
+FAC - Face
+FAH - Facial Hair
+GLA - Glasses
+HAR - Hair
+HED - Head
+HEF - Full Head
+SHO - Shoes
+### Item Position IDs
+HAR Item Position ID: 1
+FAC Item Position ID: 2
+HEF Item Position ID: 3
+GLA Item Position ID: 4
+FAH Item Position ID: 5
+BDF Item Position ID: 6
+HED Item Position ID: 7
+ACC Item Position ID: 8
+EX0 Item Position ID: 9
+EX1 Item Position ID: 10
+EX2 Item Position ID: 11
+BDU Item Position ID: 14
+BTM Item Position ID: 15
+SHO Item Position ID: 16	
+
+
+### Stage IDs
+
+ST01_Arena - Arena
+ST01_Arena_Battle1 - Arena (Underground)
+ST02_NeoCity - Urban Square (Evening)
+ST02_NeoCity_Battle1 - Urban Square
+ST03_IslandA - Yakushima
+STG04_Colosseum - Colosseum
+ST05_Hangar - Rebel Hangar
+ST06_Ruins - Pac-Pixels
+ST07_FinalBattle - Fallen Destiny
+ST08_Grassland - Battle field in chapter 10 of the story mode
+ST09_SpiritWorld - Descent Into Subconscious
+ST10_Mountains - Sanctum
+ST11_VolcanicBomb - Into The Stratosphere
+ST12_InTheMist - Ortiz Farm
+ST13_River - Celebration On The Seine
+ST14_Garden - Secluded Training Ground
+ST15_Penthouse - Elegant Palace
+ST16_WarZone - Midnight Siege
+ST17_Sea - Seaside Resort
+ST18_Shiren - Genmaji Temple
+ST18_Shiren_Battle1 - Genmaji Temple (Daytime)
+ST19_OKM - Phoenix Gate
+ST90_BeachSide - Tekken Ball Beach
+STG99_AssetCheck - Developer Stage

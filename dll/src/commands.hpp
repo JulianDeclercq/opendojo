@@ -22,6 +22,7 @@ struct DrillHeader {
     std::string            name;
     std::string            description;
     std::string            character;          // lowercase id; "unknown" if unset
+    std::string            cpu_side;           // "p1" / "p2" / "" (unset)
     std::size_t            recording_count = 0;
 };
 
@@ -55,10 +56,15 @@ struct ExportResult {
 // Snapshot every currently-occupied slot (event_count > 0) into one drill
 // file. `drill_name` becomes both the `name:` field and the basis for the
 // filename slug. Empty `drill_name` -> "drill_YYYYmmdd_HHMMSS".
-// `description` and `character` are written into the header verbatim.
+//
+// `description` is written into the header verbatim. `character` and
+// `cpu_side` are auto-detected from the live game state at export time
+// — pass empty strings to let detection fill them; non-empty values
+// override the detection.
 ExportResult export_current_slots(std::string_view drill_name,
                                   std::string_view description,
-                                  std::string_view character);
+                                  std::string_view character,
+                                  std::string_view cpu_side);
 
 // Diagnostic: print module base, pool1 state, and per-slot event counts to
 // the log. Useful from the menu's "Show status" button.

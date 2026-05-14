@@ -9,6 +9,7 @@
 
 #include "commands.hpp"
 #include "log.hpp"
+#include "players.hpp"
 #include "slot.hpp"
 #include "subsystems.hpp"
 #include "theme.hpp"
@@ -28,6 +29,10 @@ struct ToastState {
 struct State {
     bool                                       drills_dirty = true;
     std::vector<opendojo::commands::DrillHeader> drills;
+
+    // Drills tab: filter rows whose `character` doesn't match the live CPU
+    // character. Disabled automatically when no CPU is detected.
+    bool show_all_drills = false;
 
     // Export form buffers.
     char export_name[96]        = "";
@@ -57,11 +62,39 @@ void draw_drills_tab() {
     ImGui::TextDisabled("Drills found in opendojo_drills/");
     ImGui::Spacing();
 
+    auto cpu = opendojo::players::detect_cpu();
+    const bool can_filter = cpu.detected && !g_state.show_all_drills;
+
+    // Count visible vs total under the current filter.
+    std::size_t visible = 0;
+    if (can_filter) {
+        for (const auto& d : g_state.drills) {
+            if (d.character == cpu.character_name) ++visible;
+        }
+    } else {
+        visible = g_state.drills.size();
+    }
+
     if (ImGui::Button("Refresh")) g_state.drills_dirty = true;
     ImGui::SameLine();
     ImGui::TextDisabled("|");
     ImGui::SameLine();
-    ImGui::TextDisabled("%zu drills", g_state.drills.size());
+    if (cpu.detected) {
+        ImGui::Checkbox("Show all", &g_state.show_all_drills);
+        ImGui::SameLine();
+        ImGui::TextDisabled("|");
+        ImGui::SameLine();
+        if (can_filter) {
+            ImGui::TextDisabled("%zu of %zu drills (filtered to %s)",
+                                visible, g_state.drills.size(), cpu.character_name.c_str());
+        } else {
+            ImGui::TextDisabled("%zu drills (CPU: %s)",
+                                g_state.drills.size(), cpu.character_name.c_str());
+        }
+    } else {
+        ImGui::TextDisabled("%zu drills (no CPU detected — filter disabled)",
+                            g_state.drills.size());
+    }
 
     ImGui::Spacing();
     ImGui::Separator();
@@ -87,6 +120,7 @@ void draw_drills_tab() {
 
         for (std::size_t i = 0; i < g_state.drills.size(); ++i) {
             const auto& d = g_state.drills[i];
+            if (can_filter && d.character != cpu.character_name) continue;
             ImGui::PushID(static_cast<int>(i));
             ImGui::TableNextRow();
 
@@ -97,7 +131,11 @@ void draw_drills_tab() {
             }
 
             ImGui::TableSetColumnIndex(1);
-            ImGui::TextUnformatted(d.character.c_str());
+            if (!d.cpu_side.empty()) {
+                ImGui::Text("%s (%s)", d.character.c_str(), d.cpu_side.c_str());
+            } else {
+                ImGui::TextUnformatted(d.character.c_str());
+            }
 
             ImGui::TableSetColumnIndex(2);
             ImGui::Text("%zu", d.recording_count);
@@ -121,6 +159,13 @@ void draw_drills_tab() {
         ImGui::EndTable();
     }
 
+    if (can_filter && visible == 0 && !g_state.drills.empty()) {
+        ImGui::Spacing();
+        ImGui::TextColored(ImVec4(1, 0.7f, 0.3f, 1),
+            "No drills match %s. Toggle \"Show all\" to see every drill.",
+            cpu.character_name.c_str());
+    }
+
     ImGui::Spacing();
     ImGui::TextDisabled(
         "Add: fills empty slots in order (refuses if too few free).  "
@@ -142,6 +187,18 @@ void draw_export_tab() {
         if (opendojo::slot::event_count(i) > 0) ++populated;
     }
     ImGui::Text("Slots with recordings: %zu / %zu", populated, opendojo::slot::USER_SLOTS);
+
+    auto cpu = opendojo::players::detect_cpu();
+    if (cpu.detected) {
+        ImGui::TextColored(ImVec4(0.55f, 0.95f, 0.65f, 1),
+            "Detected: %s (CPU on %s, id=%u)",
+            cpu.character_name.c_str(),
+            opendojo::players::side_to_string(cpu.cpu_side),
+            static_cast<unsigned>(cpu.character_id));
+    } else {
+        ImGui::TextColored(ImVec4(1, 0.7f, 0.3f, 1),
+            "Detected: not in a match (character/side will be \"unknown\")");
+    }
     ImGui::Spacing();
 
     ImGui::PushItemWidth(420);
@@ -152,7 +209,7 @@ void draw_export_tab() {
 
     ImGui::TextDisabled(
         "Name -> filename slug. Leave blank for timestamp.\n"
-        "Character is a free-form lowercase tag (e.g. \"jin\").");
+        "Character: blank = use detected value above. Free-form lowercase tag overrides.");
 
     ImGui::Spacing();
 
@@ -162,7 +219,8 @@ void draw_export_tab() {
         auto r = opendojo::commands::export_current_slots(
             g_state.export_name,
             g_state.export_description,
-            g_state.export_character);
+            g_state.export_character,
+            "" /* cpu_side: always use detection */);
         show_toast(r.message, !r.ok);
         if (r.ok) {
             g_state.export_name[0] = 0;

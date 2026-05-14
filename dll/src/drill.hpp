@@ -32,6 +32,7 @@ struct Drill {
     std::string             name;            // human-readable drill name
     std::string             description;     // single-line free-form
     std::string             character;       // lowercase id; "unknown" if unset
+    std::string             cpu_side;        // "p1" / "p2" / "" (unset)
     std::vector<Recording>  recordings;
 };
 
