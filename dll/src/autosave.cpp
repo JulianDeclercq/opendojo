@@ -40,36 +40,25 @@ struct State {
     // file-missing don't count; those retry indefinitely.
     int           failures            = 0;
     int           frames_until_retry  = 0;
-    // When true, the pending load is blocked waiting for the game's
-    // practice-setup pass to complete. We detect that pass by polling
-    // subC[0x25C]: 0 while the game is still initializing, non-zero
-    // (0xFFFFFFFF for "no recordings loaded") once the pass completes
-    // ~5s after match entry. Writing recorded-flag state before this
-    // pass gets clobbered by it. Only set on match-entry transitions;
-    // char-switches within practice load immediately.
-    bool          pending_wait_baseline = false;
-    int           baseline_wait_frames  = 0;
+    // Frames spent waiting for the round-active gate (player1.frames_since_round_start >= 1).
+    // Until this fires, writing recording-flag state during the round
+    // intro freezes character input — the singleton +0x002 = 0x40 etc.
+    // writes in set_recorded_flag look like "playback armed, awaiting
+    // trigger" to the game, and the user can't move until they manually
+    // re-evaluate state (open the pause menu, or Select+A reset).
+    int           round_wait_frames   = 0;
 
-    // Practice-mode gate. We tick only when subsystems::lookup(KEY_GAMEPLAY)
-    // is non-zero (we're in a practice scene). A small grace window keeps
-    // us live for a few frames after the subsystem clears so the
-    // exit-from-practice save still fires.
+    // Practice-mode gate. We tick only while we're inside a practice scene.
+    // A small grace window keeps us live for a few frames after the
+    // subsystem clears so the exit-from-practice save still fires.
     int           frames_outside_practice = 9999;  // start firmly outside
 };
 State g_s;
 
-constexpr int MAX_FAILURES               = 3;     // give up after this many load_drill !ok
-constexpr int RETRY_INTERVAL             = 60;    // poll once per second between retries
-constexpr int EXIT_GRACE_FRAMES          = 5;     // keep ticking briefly after leaving practice
-constexpr int MAX_BASELINE_WAIT_FRAMES   = 1200;  // 20s safety timeout if baseline gate never fires
-
-// Offset within the subC subsystem where the game writes its
-// "recording state initialized" marker (0xFFFFFFFF = no recordings,
-// 1 = recording loaded). subC[0x25C] is 0 until the game's
-// practice-setup pass writes it, ~5s after Player1* becomes non-zero.
-// Same offset OpenDojo's set_recorded_flag already uses; see
-// project_tekken_pool_init memory.
-constexpr std::uintptr_t SUBC_BASELINE_FLAG_OFFSET = 0x25C;
+constexpr int MAX_FAILURES             = 3;     // give up after this many load_drill !ok
+constexpr int RETRY_INTERVAL           = 60;    // poll once per second between retries
+constexpr int EXIT_GRACE_FRAMES        = 5;     // keep ticking briefly after leaving practice
+constexpr int MAX_ROUND_WAIT_FRAMES    = 1800;  // 30s safety timeout if round-active never fires
 
 std::filesystem::path autosave_path(std::string_view character) {
     // Character names are pure ASCII (lowercase a-z + digits + underscore)
@@ -119,11 +108,11 @@ void ensure_initialized() {
 bool save_for(std::string_view character) {
     if (!subsystems::pool1()) return false;
 
-    std::size_t total_events = 0;
+    std::size_t populated_slots = 0;
     for (std::size_t i = 0; i < slot::USER_SLOTS; ++i) {
-        total_events += slot::event_count(i);
+        if (slot::is_populated(i)) ++populated_slots;
     }
-    if (total_events == 0) {
+    if (populated_slots == 0) {
         // Nothing to save — but don't overwrite an existing autosave file
         // with an empty one. Just leave whatever was there.
         return true;
@@ -144,7 +133,7 @@ bool save_for(std::string_view character) {
     d.character   = std::string(character);
 
     for (std::size_t i = 0; i < slot::USER_SLOTS; ++i) {
-        if (slot::event_count(i) == 0) continue;
+        if (!slot::is_populated(i)) continue;
         std::uint8_t buf[slot::SLOT_PITCH];
         if (!slot::read(i, buf)) continue;
         char rn[32];
@@ -206,19 +195,17 @@ LoadResult try_load_once(std::string_view character) {
 
 void clear_pending() {
     g_s.pending_load.clear();
-    g_s.failures              = 0;
-    g_s.frames_until_retry    = 0;
-    g_s.pending_wait_baseline = false;
-    g_s.baseline_wait_frames  = 0;
+    g_s.failures            = 0;
+    g_s.frames_until_retry  = 0;
+    g_s.round_wait_frames   = 0;
 }
 
-// Game-side practice-setup pass detection. Returns true once the game
-// has written its recording-state baseline marker to subC[0x25C]. Until
-// then any recorded-flag writes we make get overwritten by this pass.
-bool game_baseline_pass_complete() {
-    auto subC = subsystems::lookup(subsystems::KEY_SUBC);
-    if (subC == 0) return false;
-    return memory::read_u32(subC + SUBC_BASELINE_FLAG_OFFSET) != 0;
+// Debug bisect markers. Create the named file inside opendojo_drills/ to
+// disable that stage of the autoload pipeline. Used to narrow down which
+// write group is causing the round-intro input freeze.
+bool dbg_skip(const char* marker_name) {
+    std::error_code ec;
+    return std::filesystem::exists(commands::drills_dir() / marker_name, ec);
 }
 
 }  // anonymous namespace
@@ -252,17 +239,7 @@ void tick() {
     ensure_initialized();
     if (!g_s.enabled) return;
 
-    // Practice-mode gate. KEY_GAMEPLAY's bound pointer is non-zero only
-    // while a practice scene is fully resolved — it clears on every scene
-    // transition out of practice (return to menu, switch to ranked, etc.)
-    // and on character-switch transitions briefly within practice.
-    //
-    // We keep ticking for EXIT_GRACE_FRAMES after the subsystem clears so
-    // the exit-save can still fire: when the user leaves practice, the
-    // subsystem clears within ~1 frame but the Player-struct holder may
-    // take a few more frames to null out; we want to catch that
-    // detected→undetected transition and save the previous character's
-    // pool1 snapshot. Five frames (~83ms at 60fps) is enough.
+    // Practice-mode gate with exit grace.
     const bool in_practice = subsystems::lookup(subsystems::KEY_GAMEPLAY) != 0;
     if (in_practice) {
         g_s.frames_outside_practice = 0;
@@ -270,13 +247,6 @@ void tick() {
         ++g_s.frames_outside_practice;
     }
     if (g_s.frames_outside_practice > EXIT_GRACE_FRAMES) return;
-
-    // While firmly in practice (not the exit-grace tail), force pool1+pool2
-    // allocation so autoload doesn't have to wait for the user to record
-    // first. Idempotent and cheap once allocated.
-    if (in_practice) {
-        subsystems::ensure_pool_allocated();
-    }
 
     auto cpu = players::detect_cpu();
 
@@ -292,61 +262,71 @@ void tick() {
     }
 
     // Queue a load when we enter practice or switch to a new character.
-    // On the false→true transition (match scene first populating) we have
-    // to wait for the game's setup pass — it writes recording-state
-    // baseline markers ~5s after Player1* appears, and any flag writes
-    // before that pass get clobbered. The deterministic gate is
-    // `game_baseline_pass_complete()` (= subC[0x25C] != 0). On within-
-    // practice character switches, baseline already passed for this
-    // match, so load can fire immediately.
+    // We hold ALL writes (pool init, slot writes, session-loaded flag
+    // commit) behind a single round-active gate. Writing
+    // set_recorded_flag's singleton/subB/subC fields during the round
+    // intro looks like "playback armed, awaiting trigger" to the game
+    // and locks character input until the user manually re-evaluates
+    // state (pause menu open, Select+A round reset).
     if (changed && cpu.detected) {
-        g_s.pending_load           = cpu.character_name;
-        g_s.failures               = 0;
-        g_s.frames_until_retry     = 0;
-        g_s.pending_wait_baseline  = !g_s.prev_detected;
-        g_s.baseline_wait_frames   = 0;
+        g_s.pending_load        = cpu.character_name;
+        g_s.failures            = 0;
+        g_s.frames_until_retry  = 0;
+        g_s.round_wait_frames   = 0;
     }
 
+    // Pending load processing — gated on round-active for the reason above.
     if (!g_s.pending_load.empty()) {
-        bool ready_to_retry = true;
-
-        // Step 1: wait for the game's practice-setup pass to complete,
-        // if applicable. Safety timeout prevents waiting forever in
-        // modes where the marker never flips.
-        if (g_s.pending_wait_baseline) {
-            ++g_s.baseline_wait_frames;
-            if (game_baseline_pass_complete()) {
-                OPENDOJO_LOG("autosave: baseline pass detected after %d frames; proceeding",
-                             g_s.baseline_wait_frames);
-                g_s.pending_wait_baseline = false;
-            } else if (g_s.baseline_wait_frames > MAX_BASELINE_WAIT_FRAMES) {
-                OPENDOJO_LOG("autosave: baseline gate didn't fire in %d frames; "
-                             "loading anyway (writes may not stick)",
-                             MAX_BASELINE_WAIT_FRAMES);
-                g_s.pending_wait_baseline = false;
-            } else {
-                ready_to_retry = false;  // keep waiting; check again next frame
+        if (!players::round_active()) {
+            ++g_s.round_wait_frames;
+            if (g_s.round_wait_frames > MAX_ROUND_WAIT_FRAMES) {
+                OPENDOJO_LOG("autosave: round-active gate didn't fire in %d frames; "
+                             "aborting autoload for %s",
+                             MAX_ROUND_WAIT_FRAMES, g_s.pending_load.c_str());
+                clear_pending();
             }
-        }
+            // else: keep waiting
+        } else if (g_s.frames_until_retry > 0) {
+            --g_s.frames_until_retry;
+        } else {
+            // Bisect: check which stages are currently disabled via debug
+            // marker files in opendojo_drills/. Log per-tick so the user
+            // sees exactly what ran on each attempt.
+            const bool skip_pool     = dbg_skip("_dbg_skip_pool");
+            const bool skip_load     = dbg_skip("_dbg_skip_load");
+            const bool skip_finalize = dbg_skip("_dbg_skip_finalize");
+            OPENDOJO_LOG("autosave: bisect stages — pool=%s load=%s finalize=%s",
+                         skip_pool ? "SKIP" : "run",
+                         skip_load ? "SKIP" : "run",
+                         skip_finalize ? "SKIP" : "run");
 
-        // Step 2: try the load. pool1-not-allocated retries indefinitely
-        // (NotReady — usually never happens since ensure_pool_allocated
-        // pre-allocates). load_drill !ok counts toward MAX_FAILURES.
-        if (ready_to_retry) {
-            if (g_s.frames_until_retry > 0) {
-                --g_s.frames_until_retry;
-            } else {
-                auto rs = try_load_once(g_s.pending_load);
-                if (rs == LoadResult::Ok) {
-                    clear_pending();
-                } else if (rs == LoadResult::Failed && ++g_s.failures >= MAX_FAILURES) {
-                    OPENDOJO_LOG("autosave: giving up on autoload for %s "
-                                 "after %d failed load_drill attempts",
-                                 g_s.pending_load.c_str(), g_s.failures);
-                    clear_pending();
-                } else {
-                    g_s.frames_until_retry = RETRY_INTERVAL;
+            if (!skip_pool) {
+                subsystems::ensure_pool_allocated();
+            }
+
+            LoadResult rs = LoadResult::Ok;  // pretend success if load is skipped
+            if (!skip_load) {
+                rs = try_load_once(g_s.pending_load);
+            }
+
+            if (rs == LoadResult::Ok) {
+                if (!skip_finalize) {
+                    if (!subsystems::mark_session_loaded(true)) {
+                        OPENDOJO_LOG("autosave: mark_session_loaded returned false "
+                                     "(see prior log for which chain link)");
+                    }
                 }
+                OPENDOJO_LOG("autosave: autoload complete for %s "
+                             "(round-wait was %d frames)",
+                             g_s.pending_load.c_str(), g_s.round_wait_frames);
+                clear_pending();
+            } else if (rs == LoadResult::Failed && ++g_s.failures >= MAX_FAILURES) {
+                OPENDOJO_LOG("autosave: giving up on autoload for %s "
+                             "after %d failed load_drill attempts",
+                             g_s.pending_load.c_str(), g_s.failures);
+                clear_pending();
+            } else {
+                g_s.frames_until_retry = RETRY_INTERVAL;
             }
         }
     }

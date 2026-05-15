@@ -177,17 +177,47 @@ LoadResult load_drill(const std::filesystem::path& path, LoadMode mode) {
         return r;
     }
 
+    // Bisect markers for narrowing where the round-intro input freeze
+    // comes from. Each marker file (empty file inside opendojo_drills/)
+    // disables one component of the load. Defaults (no markers) match
+    // pre-bisect behavior.
+    auto dbg_skip = [](const char* name) {
+        std::error_code ec;
+        return std::filesystem::exists(drills_dir() / name, ec);
+    };
+    const bool skip_pre_clear  = dbg_skip("_dbg_skip_pre_clear");
+    const bool skip_slot_bytes = dbg_skip("_dbg_skip_slot_bytes");
+    const bool skip_set_flag   = dbg_skip("_dbg_skip_set_flag");
+    OPENDOJO_LOG("load_drill: bisect — pre_clear=%s slot_bytes=%s set_flag=%s",
+                 skip_pre_clear  ? "SKIP" : "run",
+                 skip_slot_bytes ? "SKIP" : "run",
+                 skip_set_flag   ? "SKIP" : "run");
+
     if (mode == LoadMode::ReplaceAll) {
-        for (std::size_t i = 0; i < opendojo::slot::USER_SLOTS; ++i) {
-            opendojo::slot::set_recorded_flag(i, false);
+        if (!skip_pre_clear) {
+            for (std::size_t i = 0; i < opendojo::slot::USER_SLOTS; ++i) {
+                opendojo::slot::set_recorded_flag(i, false);
+            }
         }
         for (std::size_t i = 0; i < d.recordings.size(); ++i) {
-            auto s = opendojo::slot::write(i, d.recordings[i].slot_bytes.data());
-            if (s != opendojo::slot::WriteStatus::Ok) {
-                char buf[128];
-                std::snprintf(buf, sizeof(buf), "slot %zu: %s", i + 1, opendojo::slot::describe(s));
-                r.message = buf;
-                return r;
+            if (!skip_slot_bytes) {
+                auto addr = opendojo::slot::address(i);
+                if (!addr) {
+                    r.message = "pool not allocated";
+                    return r;
+                }
+                opendojo::memory::write_bytes(
+                    addr, d.recordings[i].slot_bytes.data(), opendojo::slot::SLOT_PITCH);
+            }
+            if (!skip_set_flag) {
+                auto s = opendojo::slot::set_recorded_flag(i, true);
+                if (s != opendojo::slot::WriteStatus::Ok) {
+                    char buf[128];
+                    std::snprintf(buf, sizeof(buf), "slot %zu: %s",
+                                  i + 1, opendojo::slot::describe(s));
+                    r.message = buf;
+                    return r;
+                }
             }
         }
         char buf[128];
@@ -201,7 +231,7 @@ LoadResult load_drill(const std::filesystem::path& path, LoadMode mode) {
     // AppendToFree.
     std::vector<std::size_t> free_slots;
     for (std::size_t i = 0; i < opendojo::slot::USER_SLOTS; ++i) {
-        if (opendojo::slot::event_count(i) == 0) free_slots.push_back(i);
+        if (!opendojo::slot::is_populated(i)) free_slots.push_back(i);
     }
     if (free_slots.size() < d.recordings.size()) {
         char buf[160];
@@ -212,15 +242,28 @@ LoadResult load_drill(const std::filesystem::path& path, LoadMode mode) {
         return r;
     }
     for (std::size_t i = 0; i < d.recordings.size(); ++i) {
-        auto s = opendojo::slot::write(free_slots[i], d.recordings[i].slot_bytes.data());
-        if (s != opendojo::slot::WriteStatus::Ok) {
-            char buf[128];
-            std::snprintf(buf, sizeof(buf), "slot %zu: %s",
-                          free_slots[i] + 1, opendojo::slot::describe(s));
-            r.message = buf;
-            return r;
+        if (!skip_slot_bytes) {
+            auto addr = opendojo::slot::address(free_slots[i]);
+            if (!addr) {
+                r.message = "pool not allocated";
+                return r;
+            }
+            opendojo::memory::write_bytes(
+                addr, d.recordings[i].slot_bytes.data(), opendojo::slot::SLOT_PITCH);
+        }
+        if (!skip_set_flag) {
+            auto s = opendojo::slot::set_recorded_flag(free_slots[i], true);
+            if (s != opendojo::slot::WriteStatus::Ok) {
+                char buf[128];
+                std::snprintf(buf, sizeof(buf), "slot %zu: %s",
+                              free_slots[i] + 1, opendojo::slot::describe(s));
+                r.message = buf;
+                return r;
+            }
         }
     }
+    // Caller is responsible for calling subsystems::mark_session_loaded —
+    // see the same note in the ReplaceAll branch above.
     char buf[160];
     std::snprintf(buf, sizeof(buf), "loaded %zu recordings into free slots",
                   d.recordings.size());
@@ -266,7 +309,7 @@ ExportResult export_current_slots(std::string_view drill_name,
     }
 
     for (std::size_t i = 0; i < opendojo::slot::USER_SLOTS; ++i) {
-        if (opendojo::slot::event_count(i) == 0) continue;
+        if (!opendojo::slot::is_populated(i)) continue;
         std::uint8_t bytes[opendojo::slot::SLOT_PITCH];
         if (!opendojo::slot::read(i, bytes)) continue;
         char rec_name[32];
@@ -324,9 +367,12 @@ void show_status() {
 
     if (p1) {
         for (std::size_t i = 0; i < opendojo::slot::USER_SLOTS; ++i) {
-            auto n = opendojo::slot::event_count(i);
-            if (n == 0) OPENDOJO_LOG("  slot %zu: empty", i + 1);
-            else        OPENDOJO_LOG("  slot %zu: %u events", i + 1, static_cast<unsigned>(n));
+            if (!opendojo::slot::is_populated(i)) {
+                OPENDOJO_LOG("  slot %zu: empty", i + 1);
+            } else {
+                auto n = opendojo::slot::event_count(i);
+                OPENDOJO_LOG("  slot %zu: %u events", i + 1, static_cast<unsigned>(n));
+            }
         }
     }
     OPENDOJO_LOG("  drill dir    = %ls", drills_dir().c_str());

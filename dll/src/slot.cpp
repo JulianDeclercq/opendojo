@@ -27,6 +27,17 @@ std::uint16_t event_count(std::size_t slot_idx) {
     return a ? memory::read_u16(a) : std::uint16_t{0};
 }
 
+bool is_populated(std::size_t slot_idx) {
+    if (slot_idx >= USER_SLOTS) return false;
+    auto gameplay = subsystems::lookup(subsystems::KEY_GAMEPLAY);
+    if (!gameplay) return false;
+    auto flag = memory::read_u32(gameplay
+                                 + GAMEPLAY_SLOT_BASE
+                                 + slot_idx * GAMEPLAY_SLOT_STRIDE
+                                 + GAMEPLAY_SLOT_FLAG);
+    return flag == 2u;
+}
+
 bool read(std::size_t slot_idx, std::uint8_t* out) {
     if (!out) return false;
     auto a = address(slot_idx);
@@ -55,24 +66,19 @@ WriteStatus set_recorded_flag(std::size_t slot_idx, bool recorded) {
                    + GAMEPLAY_SLOT_FLAG;
 
     if (recorded) {
-        memory::write_u32(flag_addr,         2u);
-        // singleton +0x02 = 0x40 is the "recording session active" marker the
-        // engine sets during a real practice recording. Empirically observed
-        // 0x40 during P2-side AND P1-side recordings; cleared to 0x00 after
-        // our import (which is the only state diff between post-record and
-        // post-import). Without this, playback ignores the per-event bit 0x20
-        // side tag and falls back to current-side interpretation — which
-        // mirrors any drill recorded with bit 0x20 set (i.e. P2-side drills).
-        memory::write_u8 (singleton + 0x002, 0x40u);
-        memory::write_u8 (singleton + 0x008, 0x01u);
-        memory::write_u8 (subB      + 0x065, 0x00u);
-        memory::write_u32(subC      + 0x25C, 1u);
+        memory::write_u32(flag_addr,         2u);     // per-slot "has recording" sentinel
+        memory::write_u8 (singleton + 0x002, 0x40u);  // playback side-gate (P1=0x40); without it P2-side drills mirror
+        memory::write_u8 (singleton + 0x008, 0x01u);  // recording-state flag — best guess "session present"
+        // subB[0x065] = 0 is omitted on purpose: writing 0 mid-intro
+        // locks character input. Best guess: "playback session armed";
+        // bisected as the sole single write that triggers the freeze.
+        memory::write_u32(subC      + 0x25C, 1u);     // global "≥1 slot is recorded" counter
     } else {
-        memory::write_u32(flag_addr,         0u);
-        memory::write_u8 (singleton + 0x002, 0x00u);
-        memory::write_u8 (singleton + 0x008, 0x00u);
-        memory::write_u8 (subB      + 0x065, 0x01u);
-        memory::write_u32(subC      + 0x25C, 0xFFFFFFFFu);  // -1 as uint32
+        memory::write_u32(flag_addr,         0u);          // clear per-slot sentinel
+        memory::write_u8 (singleton + 0x002, 0x00u);       // clear side-gate
+        memory::write_u8 (singleton + 0x008, 0x00u);       // clear session-present
+        memory::write_u8 (subB      + 0x065, 0x01u);       // baseline "no playback" — safe during intro
+        memory::write_u32(subC      + 0x25C, 0xFFFFFFFFu); // -1 == "no recordings" (game's baseline-pass value)
     }
     return WriteStatus::Ok;
 }

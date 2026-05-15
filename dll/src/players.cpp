@@ -305,4 +305,35 @@ CpuInfo detect_cpu() {
     return c;
 }
 
+bool round_active() {
+    if (!ensure_resolved()) return false;
+    auto holder = memory::read_u64(g_resolved.holder_global_slot);
+    if (!holder) return false;
+    auto p1 = memory::read_u64(holder + HOLDER_P1);
+    if (!p1) return false;
+    // T8 Player+0x15C0 = frames_since_round_start (Irony types.zig).
+    // 0 during intro / before FIGHT; ticks up once the round is live
+    // and character input is being processed.
+    auto frames = memory::read_u32(p1 + 0x15C0);
+    return frames >= 1;
+}
+
+std::uintptr_t cpu_player_address() {
+    if (!ensure_resolved()) return 0;
+    auto holder = memory::read_u64(g_resolved.holder_global_slot);
+    if (!holder) return 0;
+    auto p1 = memory::read_u64(holder + HOLDER_P1);
+    auto p2 = memory::read_u64(holder + HOLDER_P2);
+    if (!p1 || !p2) return 0;
+
+    auto lvl1 = memory::read_u64(g_resolved.info_global_slot);
+    auto lvl2 = lvl1 ? memory::read_u64(lvl1 + INFO_STEP_2) : 0;
+    auto lvl3 = lvl2 ? memory::read_u64(lvl2 + INFO_STEP_3) : 0;
+    auto info = lvl3 ? memory::read_u64(lvl3 + INFO_STEP_4) : 0;
+    if (!info) return 0;
+
+    auto human_player_id = memory::read_u8(info + OFF_PLAYER_ID);
+    return (human_player_id == 0) ? p2 : p1;
+}
+
 }  // namespace opendojo::players

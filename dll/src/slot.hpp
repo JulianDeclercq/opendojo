@@ -48,7 +48,17 @@ const char* describe(WriteStatus s);
 std::uintptr_t address(std::size_t slot_idx);
 
 // uint16 event count at the start of slot N. 0 if pool not allocated.
+// NOTE: this returns the raw value from pool1, which can read non-zero
+// for slots the user has cleared via the in-game "Not set" option —
+// clearing only flips the gameplay flag, it doesn't zero pool1 bytes.
+// Use is_populated() for the truth signal on "does this slot count?".
 std::uint16_t event_count(std::size_t slot_idx);
+
+// True iff the gameplay subsystem's per-slot flag is set (== 2), meaning
+// the game considers this slot to have a real recording. Falls back to
+// false (rather than a stale pool1 read) when the gameplay subsystem
+// isn't resolved yet — outside practice mode we report all empty.
+bool is_populated(std::size_t slot_idx);
 
 // Copy the full 7202-byte slot payload into `out`. Caller owns the buffer.
 // Returns false if pool not allocated or slot out of range.

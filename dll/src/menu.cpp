@@ -145,6 +145,7 @@ void draw_drills_tab() {
             if (ImGui::Button("Add", ImVec2(-1, 0))) {
                 auto r = opendojo::commands::load_drill(d.path,
                             opendojo::commands::LoadMode::AppendToFree);
+                if (r.ok) opendojo::subsystems::mark_session_loaded(true);
                 show_toast(r.message, !r.ok);
             }
 
@@ -152,6 +153,7 @@ void draw_drills_tab() {
             if (ImGui::Button("Replace", ImVec2(-1, 0))) {
                 auto r = opendojo::commands::load_drill(d.path,
                             opendojo::commands::LoadMode::ReplaceAll);
+                if (r.ok) opendojo::subsystems::mark_session_loaded(true);
                 show_toast(r.message, !r.ok);
             }
 
@@ -185,7 +187,7 @@ void draw_export_tab() {
 
     std::size_t populated = 0;
     for (std::size_t i = 0; i < opendojo::slot::USER_SLOTS; ++i) {
-        if (opendojo::slot::event_count(i) > 0) ++populated;
+        if (opendojo::slot::is_populated(i)) ++populated;
     }
     ImGui::Text("Slots with recordings: %zu / %zu", populated, opendojo::slot::USER_SLOTS);
 
@@ -277,9 +279,12 @@ void draw_status_tab() {
                 ImGui::TextDisabled("—");
                 continue;
             }
-            auto n = opendojo::slot::event_count(i);
-            if (n == 0) ImGui::TextDisabled("empty");
-            else        ImGui::Text("%u", static_cast<unsigned>(n));
+            if (!opendojo::slot::is_populated(i)) {
+                ImGui::TextDisabled("empty");
+            } else {
+                auto n = opendojo::slot::event_count(i);
+                ImGui::Text("%u", static_cast<unsigned>(n));
+            }
         }
         ImGui::EndTable();
     }

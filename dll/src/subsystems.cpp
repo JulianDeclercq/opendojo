@@ -4,6 +4,7 @@
 
 #include "log.hpp"
 #include "memory.hpp"
+#include "players.hpp"
 
 namespace {
 
@@ -53,6 +54,39 @@ std::uintptr_t opendojo::subsystems::pool1() {
 
 std::uintptr_t opendojo::subsystems::pool2() {
     return memory::read_u64(memory::polaris(POOL2_PTR_OFFSET));
+}
+
+bool opendojo::subsystems::mark_session_loaded(bool loaded) {
+    auto singleton = lookup(KEY_SINGLETON);
+    if (!singleton) {
+        OPENDOJO_LOG("mark_session_loaded: singleton subsystem unresolved");
+        return false;
+    }
+
+    // Mirror the post-finalize singleton/recording state from the
+    // natural Record→Confirm flow (FUN_141911380).
+    auto word0 = memory::read_u32(singleton);
+    if (loaded) {
+        memory::write_u32(singleton,        word0 | 0x400000u);  // bit 22: "session exists" — UI gates on this
+        memory::write_u32(singleton + 0x22, 0u);                 // "actively recording" — clear to mark "saved, idle"
+        memory::write_u8 (singleton + 0x99, 0u);                 // mid-record progress flag — clear when done
+        auto recording = lookup(KEY_RECORDING);
+        if (recording) memory::write_u32(recording + 0x28, 0u);  // pre_clear's 2nd write; meaning unknown but natural finalize zeroes it
+    } else {
+        memory::write_u32(singleton, word0 & ~0x400000u);        // clear "session exists" bit
+    }
+
+    // opponent_player[0x39C0]: "this opponent has a recording session
+    // loaded for playback". Practice UI gates the playback option on it.
+    // Reached via the GlobalPlayerHolder chain (KEY_PLAYERS_SUB not
+    // reliably resolved in our context).
+    auto opponent = players::cpu_player_address();
+    if (!opponent) {
+        OPENDOJO_LOG("mark_session_loaded: opponent player address unresolved");
+        return false;
+    }
+    memory::write_u32(opponent + 0x39C0, loaded ? 1u : 0u);
+    return true;
 }
 
 void opendojo::subsystems::ensure_pool_allocated() {

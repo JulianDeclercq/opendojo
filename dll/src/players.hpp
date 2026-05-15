@@ -43,4 +43,20 @@ bool        parse_side(std::string_view s, Side& out);
 // ids outside the known roster; callers should format "unknown_<id>".
 const char* character_name(std::uint32_t id);
 
+// True iff a round is actively in progress (not the intro / round-start
+// animation). Reads Player1[0x15C0] = frames_since_round_start (Irony's
+// offset for T8). Returns 0 / false when out of a match or during the
+// intro phase when input is still locked. Used as the deterministic
+// gate for all autoload writes — writing recording-flag state during
+// the intro freezes character input until the user manually re-evaluates
+// state (pause menu open, Select+A reset).
+bool round_active();
+
+// Address of the CPU/opponent's Player struct, or 0 if no match.
+// Reaches the same struct as the natural game code via the
+// GlobalPlayerHolder chain (more reliable than the service-locator
+// players_sub subsystem, which isn't always registered when we'd want
+// to write opponent state).
+std::uintptr_t cpu_player_address();
+
 }  // namespace opendojo::players
