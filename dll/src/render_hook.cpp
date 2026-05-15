@@ -17,6 +17,7 @@
 #include "MinHook.h"
 
 #include "autosave.hpp"
+#include "native_menu.hpp"
 #include "log.hpp"
 #include "menu.hpp"
 #include "theme.hpp"
@@ -414,6 +415,11 @@ HRESULT STDMETHODCALLTYPE hook_present(
     // Autosave runs every frame regardless of menu visibility — it watches
     // for character/scene transitions and snapshots pool1 accordingly.
     opendojo::autosave::tick();
+
+    // Native (UMG) menu — Phase 0 scaffolding. Polls F11 for visibility
+    // toggle; runs in parallel with the ImGui menu (F12) during development.
+    // See NATIVE_MENU_DESIGN.md.
+    opendojo::native_menu::tick();
 
     if (!g_menu_visible.load()) {
         return g_present_orig(self, sync_interval, flags);

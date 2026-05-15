@@ -12,6 +12,7 @@
 #include "commands.hpp"
 #include "drill.hpp"
 #include "log.hpp"
+#include "memory.hpp"
 #include "players.hpp"
 #include "slot.hpp"
 #include "subsystems.hpp"
@@ -39,6 +40,15 @@ struct State {
     // file-missing don't count; those retry indefinitely.
     int           failures            = 0;
     int           frames_until_retry  = 0;
+    // When true, the pending load is blocked waiting for the game's
+    // practice-setup pass to complete. We detect that pass by polling
+    // subC[0x25C]: 0 while the game is still initializing, non-zero
+    // (0xFFFFFFFF for "no recordings loaded") once the pass completes
+    // ~5s after match entry. Writing recorded-flag state before this
+    // pass gets clobbered by it. Only set on match-entry transitions;
+    // char-switches within practice load immediately.
+    bool          pending_wait_baseline = false;
+    int           baseline_wait_frames  = 0;
 
     // Practice-mode gate. We tick only when subsystems::lookup(KEY_GAMEPLAY)
     // is non-zero (we're in a practice scene). A small grace window keeps
@@ -48,10 +58,18 @@ struct State {
 };
 State g_s;
 
-constexpr int MAX_FAILURES         = 3;     // give up after this many load_drill !ok
-constexpr int RETRY_INTERVAL       = 60;    // poll once per second between retries
-constexpr int EXIT_GRACE_FRAMES    = 5;     // keep ticking briefly after leaving practice
-constexpr int ENTRY_SETTLE_FRAMES  = 60;    // wait ~1s after entering practice before first autoload attempt
+constexpr int MAX_FAILURES               = 3;     // give up after this many load_drill !ok
+constexpr int RETRY_INTERVAL             = 60;    // poll once per second between retries
+constexpr int EXIT_GRACE_FRAMES          = 5;     // keep ticking briefly after leaving practice
+constexpr int MAX_BASELINE_WAIT_FRAMES   = 1200;  // 20s safety timeout if baseline gate never fires
+
+// Offset within the subC subsystem where the game writes its
+// "recording state initialized" marker (0xFFFFFFFF = no recordings,
+// 1 = recording loaded). subC[0x25C] is 0 until the game's
+// practice-setup pass writes it, ~5s after Player1* becomes non-zero.
+// Same offset OpenDojo's set_recorded_flag already uses; see
+// project_tekken_pool_init memory.
+constexpr std::uintptr_t SUBC_BASELINE_FLAG_OFFSET = 0x25C;
 
 std::filesystem::path autosave_path(std::string_view character) {
     // Character names are pure ASCII (lowercase a-z + digits + underscore)
@@ -188,8 +206,19 @@ LoadResult try_load_once(std::string_view character) {
 
 void clear_pending() {
     g_s.pending_load.clear();
-    g_s.failures           = 0;
-    g_s.frames_until_retry = 0;
+    g_s.failures              = 0;
+    g_s.frames_until_retry    = 0;
+    g_s.pending_wait_baseline = false;
+    g_s.baseline_wait_frames  = 0;
+}
+
+// Game-side practice-setup pass detection. Returns true once the game
+// has written its recording-state baseline marker to subC[0x25C]. Until
+// then any recorded-flag writes we make get overwritten by this pass.
+bool game_baseline_pass_complete() {
+    auto subC = subsystems::lookup(subsystems::KEY_SUBC);
+    if (subC == 0) return false;
+    return memory::read_u32(subC + SUBC_BASELINE_FLAG_OFFSET) != 0;
 }
 
 }  // anonymous namespace
@@ -263,36 +292,61 @@ void tick() {
     }
 
     // Queue a load when we enter practice or switch to a new character.
-    // Settle delay: when we just entered practice from outside (the
-    // detected=false→true case), wait a beat before the first load
-    // attempt. The game's own practice-mode init runs in the few frames
-    // after KEY_GAMEPLAY appears; if we autoload too early our state
-    // writes get clobbered by the game's setup pass — the in-game UI
-    // then never shows the recordings even though pool1 is correct.
-    // Within-practice character switches don't need the delay.
+    // On the false→true transition (match scene first populating) we have
+    // to wait for the game's setup pass — it writes recording-state
+    // baseline markers ~5s after Player1* appears, and any flag writes
+    // before that pass get clobbered. The deterministic gate is
+    // `game_baseline_pass_complete()` (= subC[0x25C] != 0). On within-
+    // practice character switches, baseline already passed for this
+    // match, so load can fire immediately.
     if (changed && cpu.detected) {
-        g_s.pending_load = cpu.character_name;
-        g_s.failures           = 0;
-        g_s.frames_until_retry = g_s.prev_detected ? 0 : ENTRY_SETTLE_FRAMES;
+        g_s.pending_load           = cpu.character_name;
+        g_s.failures               = 0;
+        g_s.frames_until_retry     = 0;
+        g_s.pending_wait_baseline  = !g_s.prev_detected;
+        g_s.baseline_wait_frames   = 0;
     }
 
-    // Retry pending load at a flat one-per-second cadence. pool1-not-yet-
-    // allocated polls forever at this rate; real load_drill failures count
-    // toward MAX_FAILURES (3) and then give up.
     if (!g_s.pending_load.empty()) {
-        if (g_s.frames_until_retry > 0) {
-            --g_s.frames_until_retry;
-        } else {
-            auto rs = try_load_once(g_s.pending_load);
-            if (rs == LoadResult::Ok) {
-                clear_pending();
-            } else if (rs == LoadResult::Failed && ++g_s.failures >= MAX_FAILURES) {
-                OPENDOJO_LOG("autosave: giving up on autoload for %s "
-                             "after %d failed load_drill attempts",
-                             g_s.pending_load.c_str(), g_s.failures);
-                clear_pending();
+        bool ready_to_retry = true;
+
+        // Step 1: wait for the game's practice-setup pass to complete,
+        // if applicable. Safety timeout prevents waiting forever in
+        // modes where the marker never flips.
+        if (g_s.pending_wait_baseline) {
+            ++g_s.baseline_wait_frames;
+            if (game_baseline_pass_complete()) {
+                OPENDOJO_LOG("autosave: baseline pass detected after %d frames; proceeding",
+                             g_s.baseline_wait_frames);
+                g_s.pending_wait_baseline = false;
+            } else if (g_s.baseline_wait_frames > MAX_BASELINE_WAIT_FRAMES) {
+                OPENDOJO_LOG("autosave: baseline gate didn't fire in %d frames; "
+                             "loading anyway (writes may not stick)",
+                             MAX_BASELINE_WAIT_FRAMES);
+                g_s.pending_wait_baseline = false;
             } else {
-                g_s.frames_until_retry = RETRY_INTERVAL;
+                ready_to_retry = false;  // keep waiting; check again next frame
+            }
+        }
+
+        // Step 2: try the load. pool1-not-allocated retries indefinitely
+        // (NotReady — usually never happens since ensure_pool_allocated
+        // pre-allocates). load_drill !ok counts toward MAX_FAILURES.
+        if (ready_to_retry) {
+            if (g_s.frames_until_retry > 0) {
+                --g_s.frames_until_retry;
+            } else {
+                auto rs = try_load_once(g_s.pending_load);
+                if (rs == LoadResult::Ok) {
+                    clear_pending();
+                } else if (rs == LoadResult::Failed && ++g_s.failures >= MAX_FAILURES) {
+                    OPENDOJO_LOG("autosave: giving up on autoload for %s "
+                                 "after %d failed load_drill attempts",
+                                 g_s.pending_load.c_str(), g_s.failures);
+                    clear_pending();
+                } else {
+                    g_s.frames_until_retry = RETRY_INTERVAL;
+                }
             }
         }
     }
