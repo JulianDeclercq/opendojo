@@ -7,6 +7,7 @@
 #include <ctime>
 #include <filesystem>
 #include <mutex>
+#include <share.h>      // _SH_DENYNO so the log can be tailed live in another process
 #include <string>
 
 namespace {
@@ -39,10 +40,11 @@ bool opendojo::log::init() {
     std::lock_guard guard(g_mutex);
     if (g_file) return true;
     auto path = log_path();
-    if (_wfopen_s(&g_file, path.wstring().c_str(), L"w") != 0) {
-        g_file = nullptr;
-        return false;
-    }
+    // _wfsopen with _SH_DENYNO leaves the file readable & writable by
+    // other processes while we're holding it open — without it the user
+    // can't tail or even open the log while the game is running.
+    g_file = _wfsopen(path.wstring().c_str(), L"w", _SH_DENYNO);
+    if (!g_file) return false;
     write_timestamp(g_file);
     std::fprintf(g_file, "OpenDojo log opened: %ls\n", path.wstring().c_str());
     std::fflush(g_file);
