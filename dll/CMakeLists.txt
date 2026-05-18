@@ -109,6 +109,8 @@ add_library(opendojo SHARED
     src/memory.cpp
     src/menu.cpp
     src/native_menu.cpp
+    src/dialog.cpp
+    src/drill_browser.cpp
     src/players.cpp
     src/render_hook.cpp
     src/slot.cpp

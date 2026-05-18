@@ -17,6 +17,8 @@
 #include "MinHook.h"
 
 #include "autosave.hpp"
+#include "dialog.hpp"
+#include "drill_browser.hpp"
 #include "native_menu.hpp"
 #include "log.hpp"
 #include "menu.hpp"
@@ -420,6 +422,16 @@ HRESULT STDMETHODCALLTYPE hook_present(
     // toggle; runs in parallel with the ImGui menu (F12) during development.
     // See NATIVE_MENU_DESIGN.md.
     opendojo::native_menu::tick();
+
+    // Dialog Phase-1: polls IsDialogDecided / IsDialogClosed when a
+    // test dialog is in flight. Cheap when no dialog open. See
+    // dll/DLL_PIVOT_PLAN.md.
+    opendojo::dialog::tick();
+
+    // Drill browser: polls ClickAvailable on the OpenDojo Root widget
+    // when the browser is open. Cheap when closed. See
+    // dll/OPENDOJO_DRILL_BROWSER_WIDGET.md.
+    opendojo::drill_browser::tick();
 
     if (!g_menu_visible.load()) {
         return g_present_orig(self, sync_interval, flags);
