@@ -10,9 +10,9 @@
 // exists for the new character, it's loaded back into pool1 via
 // commands::load_drill(..., ReplaceAll).
 //
-// Scratch drills live at opendojo_drills/_autosave_<character>.drill.
+// Scratch drills live at opendojo/_autosave_<character>.drill.
 // The leading underscore hides them from the Drills tab listing.
-// The toggle is persisted to opendojo_drills/_autosave_enabled — a
+// The toggle is persisted to opendojo/_autosave_enabled — a
 // marker file whose mere existence means "on".
 //
 // Limitations:

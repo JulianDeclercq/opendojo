@@ -200,7 +200,7 @@ void clear_pending() {
     g_s.round_wait_frames   = 0;
 }
 
-// Debug bisect markers. Create the named file inside opendojo_drills/ to
+// Debug bisect markers. Create the named file inside opendojo/ to
 // disable that stage of the autoload pipeline. Used to narrow down which
 // write group is causing the round-intro input freeze.
 bool dbg_skip(const char* marker_name) {
@@ -290,7 +290,7 @@ void tick() {
             --g_s.frames_until_retry;
         } else {
             // Bisect: check which stages are currently disabled via debug
-            // marker files in opendojo_drills/. Log per-tick so the user
+            // marker files in opendojo/. Log per-tick so the user
             // sees exactly what ran on each attempt.
             const bool skip_pool     = dbg_skip("_dbg_skip_pool");
             const bool skip_load     = dbg_skip("_dbg_skip_load");

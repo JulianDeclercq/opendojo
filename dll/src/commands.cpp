@@ -28,7 +28,22 @@ std::filesystem::path drills_dir() {
     auto root = (n > 0 && n < MAX_PATH)
         ? std::filesystem::path(buf).parent_path()
         : std::filesystem::path(L".");
-    return root / L"opendojo_drills";
+    auto target = root / L"opendojo";
+
+    // One-time migration: prior versions stored data under "opendojo_drills".
+    // Rename if that legacy folder exists and the new path doesn't.
+    static bool migrated = false;
+    if (!migrated) {
+        migrated = true;
+        auto legacy = root / L"opendojo_drills";
+        std::error_code ec;
+        if (std::filesystem::exists(legacy, ec)
+            && !std::filesystem::exists(target, ec)) {
+            std::filesystem::rename(legacy, target, ec);
+            // Best-effort; if rename fails the user can rename manually.
+        }
+    }
+    return target;
 }
 
 namespace {
@@ -178,7 +193,7 @@ LoadResult load_drill(const std::filesystem::path& path, LoadMode mode) {
     }
 
     // Bisect markers for narrowing where the round-intro input freeze
-    // comes from. Each marker file (empty file inside opendojo_drills/)
+    // comes from. Each marker file (empty file inside opendojo/)
     // disables one component of the load. Defaults (no markers) match
     // pre-bisect behavior.
     auto dbg_skip = [](const char* name) {

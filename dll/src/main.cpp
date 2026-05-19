@@ -19,6 +19,7 @@
 #include <string>
 #include <thread>
 
+#include "config.hpp"
 #include "log.hpp"
 #include "memory.hpp"
 #include "proxy.hpp"
@@ -43,6 +44,10 @@ void init_thread() {
     OPENDOJO_LOG("pool1 = 0x%llX (%s)",
                 static_cast<unsigned long long>(p1),
                 p1 ? "ready" : "not allocated yet — record once in practice mode");
+
+    // Load persistent settings (hotkey binding etc.). Defaults are
+    // applied if no config.json exists yet.
+    opendojo::config::load();
 
     // Renderer hook drives the menu. Skipped if a file named
     // "opendojo_no_menu" exists next to the DLL — used to diagnose whether

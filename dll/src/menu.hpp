@@ -1,16 +1,21 @@
 #pragma once
 
-// ImGui menu surface. Drawn from the render hook each frame the menu is
-// visible. State (drill list cache, form buffers, toast) is owned by the
-// .cpp — there's only one instance, lifetime equals process lifetime.
+// Top-level menu driver — lives on top of the RmlUi backend.
+// Owns the click handlers and the per-frame DOM refresh that pulls live
+// data (drill list, slot occupancy, autosave/hotkey state) into the
+// elements declared in main.rml. The render hook calls draw() each frame
+// the menu is visible and invalidate() when it transitions from hidden
+// to visible.
 
 namespace opendojo::menu {
 
-// Draw one frame of the menu. Caller must already have called ImGui::NewFrame
-// for this frame and will call ImGui::Render afterward.
+// One per-frame refresh + per-frame style/DOM sync. Cheap when the
+// underlying state hasn't changed — Rml::Element::SetInnerRML diffs
+// internally and AddEventListener is wired once on first call.
 void draw();
 
-// Force a re-scan of opendojo_drills/ on the next draw. Cheap to call.
+// Mark the drill list cache as stale so the next draw() re-scans
+// opendojo/. Cheap to call.
 void invalidate();
 
 }  // namespace opendojo::menu

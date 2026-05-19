@@ -1,0 +1,149 @@
+<rml>
+<head>
+    <title>OpenDojo</title>
+    <link type="text/rcss" href="main.rcss"/>
+</head>
+<body id="opendojo-body">
+
+    <!-- The whole menu is one panel. No header strip — Tekken's practice
+         menu starts straight at the sidebar/content split. -->
+    <div id="window">
+
+        <div id="layout">
+
+            <nav id="sidebar">
+                <div id="nav-drills"   class="navitem selected"><span class="navtext">Drills</span></div>
+                <div id="nav-export"   class="navitem"><span class="navtext">Export Current Slots</span></div>
+                <div id="nav-status"   class="navitem"><span class="navtext">Slot Status</span></div>
+                <div id="nav-settings" class="navitem"><span class="navtext">Settings</span></div>
+                <div id="nav-about"    class="navitem"><span class="navtext">About</span></div>
+                <div id="nav-close"    class="navitem"><span class="navtext">Close Menu</span></div>
+            </nav>
+
+            <main id="content">
+
+                <!-- ====================== Drills ====================== -->
+                <section id="section-drills" class="section">
+                    <div id="drill-meta" class="row row-meta">
+                        <span id="drill-meta-text" class="label">No drills loaded.</span>
+                        <span id="drill-meta-filter" class="value">Filter: On</span>
+                    </div>
+
+                    <div id="drill-list">
+                        <div class="row drill-empty">
+                            <span class="label">No drills found in opendojo/.</span>
+                            <span class="value">Empty</span>
+                        </div>
+                    </div>
+
+                    <div class="row row-action">
+                        <span class="label">Refresh disk listing</span>
+                        <button id="btn-refresh" class="value-btn">Refresh</button>
+                    </div>
+                    <div class="row row-action">
+                        <span class="label">Filter by current CPU character</span>
+                        <button id="btn-filter" class="value-btn">On</button>
+                    </div>
+                </section>
+
+                <!-- ====================== Export ====================== -->
+                <section id="section-export" class="section hidden">
+                    <div class="row">
+                        <span class="label">Populated slots</span>
+                        <span class="value" id="export-populated">0 / 8</span>
+                    </div>
+                    <div class="row">
+                        <span class="label">Detected character</span>
+                        <span class="value" id="export-character">Unknown</span>
+                    </div>
+                    <div class="row">
+                        <span class="label">CPU side</span>
+                        <span class="value" id="export-side">—</span>
+                    </div>
+                    <div class="row row-input">
+                        <span class="label">Drill name</span>
+                        <input type="text" id="export-name" maxlength="80"/>
+                    </div>
+                    <div class="row row-input">
+                        <span class="label">Description</span>
+                        <input type="text" id="export-desc" maxlength="140"/>
+                    </div>
+                    <div class="row row-action">
+                        <span class="label">Save current slots as a drill file</span>
+                        <button id="btn-export" class="value-btn primary">Export</button>
+                    </div>
+                </section>
+
+                <!-- ====================== Status ====================== -->
+                <section id="section-status" class="section hidden">
+                    <div class="row">
+                        <span class="label">Pool1 (recording memory)</span>
+                        <span class="value" id="status-pool">Not allocated</span>
+                    </div>
+                    <div class="row">
+                        <span class="label">Autosave per character</span>
+                        <button id="btn-autosave" class="value-btn">Off</button>
+                    </div>
+                    <div id="slot-list"></div>
+                </section>
+
+                <!-- ====================== Settings ====================== -->
+                <section id="section-settings" class="section hidden">
+                    <div class="row">
+                        <span class="label">Menu toggle key</span>
+                        <span class="value" id="settings-hotkey">F12</span>
+                    </div>
+                    <div class="row row-action">
+                        <span class="label">Rebind menu toggle</span>
+                        <button id="btn-rebind" class="value-btn">Rebind</button>
+                    </div>
+                    <div class="row row-action">
+                        <span class="label">Reset toggle to default</span>
+                        <button id="btn-reset-hotkey" class="value-btn">Reset</button>
+                    </div>
+                    <div class="row note">
+                        <span class="label">Gamepad chord (Select + Start) is fixed in this build.</span>
+                    </div>
+                </section>
+
+                <!-- ====================== About ====================== -->
+                <section id="section-about" class="section hidden">
+                    <div class="row about-row">
+                        <span class="label">OpenDojo — practice-mode drill tool.</span>
+                    </div>
+                    <div class="row about-row">
+                        <span class="label">Save and share practice recordings as drill files.</span>
+                    </div>
+                    <div class="row about-row">
+                        <span class="label">Each drill contains one or more recordings; loading places them in the in-game slots so you can rehearse scenarios offline.</span>
+                    </div>
+                    <div class="row">
+                        <span class="label">Drill files</span>
+                        <span class="value">opendojo/*.drill</span>
+                    </div>
+                    <div class="row">
+                        <span class="label">Format version</span>
+                        <span class="value">v2</span>
+                    </div>
+                </section>
+
+            </main>
+        </div>
+
+        <!-- Description strip mirrors the Tekken help line under the columns. -->
+        <div id="strip">
+            <span id="strip-text">Browse, load and replace drill files saved by OpenDojo.</span>
+        </div>
+
+        <!-- Bottom hint bar. Plain glyph + label pairs match Tekken's style. -->
+        <footer id="hints">
+            <span class="hint"><span class="glyph">A</span><span class="hint-label">Confirm</span></span>
+            <span class="hint"><span class="glyph">B</span><span class="hint-label">Back</span></span>
+            <span class="hint"><span class="glyph">Y</span><span class="hint-label">Toggle Filter</span></span>
+            <span class="hint"><span class="glyph">X</span><span class="hint-label">Refresh</span></span>
+            <span id="toast" class="toast"></span>
+        </footer>
+
+    </div>
+</body>
+</rml>

@@ -1,19 +1,27 @@
 #include "menu.hpp"
 
-#include "imgui.h"
+#include "autosave.hpp"
+#include "commands.hpp"
+#include "config.hpp"
+#include "log.hpp"
+#include "players.hpp"
+#include "render_hook.hpp"
+#include "rmlui_backend.hpp"
+#include "slot.hpp"
+#include "subsystems.hpp"
+
+#include <RmlUi/Core.h>
+#include <RmlUi/Core/Element.h>
+#include <RmlUi/Core/ElementDocument.h>
+#include <RmlUi/Core/Elements/ElementFormControlInput.h>
+
+#include <windows.h>
 
 #include <chrono>
+#include <cstdio>
 #include <cstring>
 #include <string>
 #include <vector>
-
-#include "autosave.hpp"
-#include "commands.hpp"
-#include "log.hpp"
-#include "players.hpp"
-#include "slot.hpp"
-#include "subsystems.hpp"
-#include "theme.hpp"
 
 namespace opendojo::menu {
 
@@ -27,359 +35,456 @@ struct ToastState {
     clock::time_point until;
 };
 
+enum class Section { Drills, Export, Status, Settings, About };
+
 struct State {
-    bool                                       drills_dirty = true;
+    bool wired = false;
+    Section section = Section::Drills;
+
+    // Drill list state.
+    bool drills_dirty = true;
+    bool drill_dom_dirty = true;
     std::vector<opendojo::commands::DrillHeader> drills;
-
-    // Drills tab: filter rows whose `character` doesn't match the live CPU
-    // character. Disabled automatically when no CPU is detected.
     bool show_all_drills = false;
-
-    // Export form buffers.
-    char export_name[96]        = "";
-    char export_description[160] = "";
-    char export_character[32]   = "";
-
-    // Set whenever the window transitions from hidden -> visible. Used
-    // to claim window focus + set initial nav focus on the first frame
-    // so gamepad / keyboard can start navigating without a mouse click.
-    bool needs_focus = true;
 
     ToastState toast;
 };
 
-State g_state;
+State g;
+
+// Map Section -> (nav element id, content section id).
+struct SectionEntry { Section s; const char* nav; const char* sec; };
+const SectionEntry kSections[] = {
+    { Section::Drills,   "nav-drills",   "section-drills"   },
+    { Section::Export,   "nav-export",   "section-export"   },
+    { Section::Status,   "nav-status",   "section-status"   },
+    { Section::Settings, "nav-settings", "section-settings" },
+    { Section::About,    "nav-about",    "section-about"    },
+};
+
+Rml::Element* el(const char* id) {
+    auto* doc = opendojo::rml_backend::document();
+    if (!doc) return nullptr;
+    return doc->GetElementById(id);
+}
+
+std::string vk_name(std::uint32_t vk) {
+    char buf[64] = {};
+    UINT scan = MapVirtualKeyA(vk, MAPVK_VK_TO_VSC);
+    LONG lparam = (scan & 0xFF) << 16;
+    switch (vk) {
+        case VK_INSERT: case VK_DELETE: case VK_HOME: case VK_END:
+        case VK_PRIOR:  case VK_NEXT:   case VK_LEFT: case VK_RIGHT:
+        case VK_UP:     case VK_DOWN:
+            lparam |= (1 << 24); break;
+    }
+    if (GetKeyNameTextA(lparam, buf, sizeof(buf)) > 0 && buf[0]) return buf;
+    std::snprintf(buf, sizeof(buf), "VK 0x%02X", vk);
+    return buf;
+}
 
 void show_toast(std::string text, bool is_error = false) {
-    g_state.toast.text = std::move(text);
-    g_state.toast.is_error = is_error;
-    g_state.toast.until = clock::now() + std::chrono::seconds(5);
+    g.toast.text = std::move(text);
+    g.toast.is_error = is_error;
+    g.toast.until = clock::now() + std::chrono::seconds(5);
+}
+
+void apply_section() {
+    for (const auto& s : kSections) {
+        auto* nav = el(s.nav);
+        if (nav) nav->SetClass("selected", s.s == g.section);
+        auto* sec = el(s.sec);
+        if (sec) sec->SetClass("hidden",   s.s != g.section);
+    }
+    // Update help strip text.
+    const char* help = "Browse, load and replace drill files saved by OpenDojo.";
+    switch (g.section) {
+        case Section::Drills:   help = "Browse, load and replace drill files saved by OpenDojo."; break;
+        case Section::Export:   help = "Save currently-recorded slots as a shareable drill file."; break;
+        case Section::Status:   help = "Diagnostic snapshot of pool1 and per-slot occupancy."; break;
+        case Section::Settings: help = "Configure the menu toggle hotkey."; break;
+        case Section::About:    help = "About OpenDojo. Drill files live in opendojo/ next to the game exe."; break;
+    }
+    if (auto* s = el("strip-text")) s->SetInnerRML(help);
+}
+
+// Lightweight HTML escaper for drill names / descriptions. RmlUi treats
+// the RML we shove in as parsable; we want to keep raw user text safe.
+std::string esc(std::string_view s) {
+    std::string out;
+    out.reserve(s.size());
+    for (char c : s) {
+        switch (c) {
+            case '&': out += "&amp;";  break;
+            case '<': out += "&lt;";   break;
+            case '>': out += "&gt;";   break;
+            case '"': out += "&quot;"; break;
+            default:  out += c;        break;
+        }
+    }
+    return out;
 }
 
 void refresh_drills_if_needed() {
-    if (!g_state.drills_dirty) return;
-    g_state.drills = opendojo::commands::list_drills();
-    g_state.drills_dirty = false;
+    if (!g.drills_dirty) return;
+    g.drills = opendojo::commands::list_drills();
+    g.drills_dirty = false;
+    g.drill_dom_dirty = true;
 }
 
-// ---- Tabs ------------------------------------------------------------------
-
-void draw_drills_tab() {
-    ImGui::TextDisabled("Drills found in opendojo_drills/");
-    ImGui::Spacing();
+void rebuild_drill_list() {
+    auto* host = el("drill-list");
+    if (!host) return;
 
     auto cpu = opendojo::players::detect_cpu();
-    const bool can_filter = cpu.detected && !g_state.show_all_drills;
+    const bool can_filter = cpu.detected && !g.show_all_drills;
 
-    // Count visible vs total under the current filter.
     std::size_t visible = 0;
-    if (can_filter) {
-        for (const auto& d : g_state.drills) {
-            if (d.character == cpu.character_name) ++visible;
+    std::string rml;
+    rml.reserve(g.drills.size() * 256 + 256);
+
+    for (std::size_t i = 0; i < g.drills.size(); ++i) {
+        const auto& d = g.drills[i];
+        if (can_filter && d.character != cpu.character_name) continue;
+        ++visible;
+        char idxbuf[32];
+        std::snprintf(idxbuf, sizeof(idxbuf), "%zu", i);
+
+        std::string meta = esc(d.character);
+        if (!d.cpu_side.empty()) {
+            meta += " (";
+            meta += esc(d.cpu_side);
+            meta += ")";
         }
-    } else {
-        visible = g_state.drills.size();
+        char rec_buf[32];
+        std::snprintf(rec_buf, sizeof(rec_buf), " · %zu rec", d.recording_count);
+        meta += rec_buf;
+
+        rml += "<div class='row drill-row' data-drill-index='";
+        rml += idxbuf;
+        rml += "'>";
+        rml += "<span class='drill-name'>";
+        rml += esc(d.name);
+        rml += "</span>";
+        rml += "<span class='drill-meta'>";
+        rml += meta;
+        rml += "</span>";
+        rml += "<span class='drill-actions'>";
+        rml += "<div class='drill-btn add' data-action='add' data-drill-index='";
+        rml += idxbuf;
+        rml += "'>Add</div>";
+        rml += "<div class='drill-btn replace' data-action='replace' data-drill-index='";
+        rml += idxbuf;
+        rml += "'>Replace</div>";
+        rml += "</span></div>";
     }
 
-    if (ImGui::Button("Refresh")) g_state.drills_dirty = true;
-    ImGui::SameLine();
-    ImGui::TextDisabled("|");
-    ImGui::SameLine();
-    if (cpu.detected) {
-        ImGui::Checkbox("Show all", &g_state.show_all_drills);
-        ImGui::SameLine();
-        ImGui::TextDisabled("|");
-        ImGui::SameLine();
-        if (can_filter) {
-            ImGui::TextDisabled("%zu of %zu drills (filtered to %s)",
-                                visible, g_state.drills.size(), cpu.character_name.c_str());
+    if (visible == 0) {
+        rml += "<div class='row drill-empty'>";
+        rml += "<span class='label'>";
+        if (g.drills.empty()) {
+            rml += "No drills found in opendojo/. Use Export to create one.";
+        } else if (can_filter) {
+            rml += "No drills match ";
+            rml += esc(cpu.character_name);
+            rml += ". Toggle filter Off to see all.";
         } else {
-            ImGui::TextDisabled("%zu drills (CPU: %s)",
-                                g_state.drills.size(), cpu.character_name.c_str());
+            rml += "No drills visible.";
         }
-    } else {
-        ImGui::TextDisabled("%zu drills (no CPU detected — filter disabled)",
-                            g_state.drills.size());
+        rml += "</span><span class='value unset'>Empty</span></div>";
     }
 
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
+    host->SetInnerRML(rml);
 
-    if (g_state.drills.empty()) {
-        ImGui::TextDisabled("No drills saved yet. Use the Export tab to create one.");
-        return;
-    }
-
-    const ImGuiTableFlags flags = ImGuiTableFlags_Borders
-                                | ImGuiTableFlags_RowBg
-                                | ImGuiTableFlags_SizingStretchProp
-                                | ImGuiTableFlags_ScrollY;
-    if (ImGui::BeginTable("drills", 5, flags, ImVec2(0, 320))) {
-        ImGui::TableSetupColumn("Name",        ImGuiTableColumnFlags_WidthStretch, 2.4f);
-        ImGui::TableSetupColumn("Character",   ImGuiTableColumnFlags_WidthStretch, 1.0f);
-        ImGui::TableSetupColumn("Recordings",  ImGuiTableColumnFlags_WidthStretch, 0.8f);
-        ImGui::TableSetupColumn("Add",         ImGuiTableColumnFlags_WidthFixed, 70.0f);
-        ImGui::TableSetupColumn("Replace",     ImGuiTableColumnFlags_WidthFixed, 80.0f);
-        ImGui::TableSetupScrollFreeze(0, 1);
-        ImGui::TableHeadersRow();
-
-        for (std::size_t i = 0; i < g_state.drills.size(); ++i) {
-            const auto& d = g_state.drills[i];
-            if (can_filter && d.character != cpu.character_name) continue;
-            ImGui::PushID(static_cast<int>(i));
-            ImGui::TableNextRow();
-
-            ImGui::TableSetColumnIndex(0);
-            ImGui::TextUnformatted(d.name.c_str());
-            if (!d.description.empty() && ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("%s", d.description.c_str());
-            }
-
-            ImGui::TableSetColumnIndex(1);
-            if (!d.cpu_side.empty()) {
-                ImGui::Text("%s (%s)", d.character.c_str(), d.cpu_side.c_str());
-            } else {
-                ImGui::TextUnformatted(d.character.c_str());
-            }
-
-            ImGui::TableSetColumnIndex(2);
-            ImGui::Text("%zu", d.recording_count);
-
-            ImGui::TableSetColumnIndex(3);
-            if (ImGui::Button("Add", ImVec2(-1, 0))) {
-                auto r = opendojo::commands::load_drill(d.path,
-                            opendojo::commands::LoadMode::AppendToFree);
-                if (r.ok) opendojo::subsystems::mark_session_loaded(true);
-                show_toast(r.message, !r.ok);
-            }
-
-            ImGui::TableSetColumnIndex(4);
-            if (ImGui::Button("Replace", ImVec2(-1, 0))) {
-                auto r = opendojo::commands::load_drill(d.path,
-                            opendojo::commands::LoadMode::ReplaceAll);
-                if (r.ok) opendojo::subsystems::mark_session_loaded(true);
-                show_toast(r.message, !r.ok);
-            }
-
-            ImGui::PopID();
+    // Meta line above the list.
+    if (auto* mt = el("drill-meta-text")) {
+        char buf[160];
+        if (cpu.detected) {
+            std::snprintf(buf, sizeof(buf), "CPU: %s · %zu drills total",
+                          cpu.character_name.c_str(), g.drills.size());
+        } else {
+            std::snprintf(buf, sizeof(buf), "%zu drills total · no CPU detected",
+                          g.drills.size());
         }
-        ImGui::EndTable();
+        mt->SetInnerRML(buf);
     }
-
-    if (can_filter && visible == 0 && !g_state.drills.empty()) {
-        ImGui::Spacing();
-        ImGui::TextColored(ImVec4(1, 0.7f, 0.3f, 1),
-            "No drills match %s. Toggle \"Show all\" to see every drill.",
-            cpu.character_name.c_str());
+    if (auto* mf = el("drill-meta-filter")) {
+        mf->SetInnerRML(can_filter ? "Filter: ON" : "Filter: OFF");
     }
-
-    ImGui::Spacing();
-    ImGui::TextDisabled(
-        "Add: fills empty slots in order (refuses if too few free).  "
-        "Replace: clears all slots first.");
+    if (auto* btn = el("btn-filter")) {
+        btn->SetInnerRML(g.show_all_drills ? "Off" : "On");
+    }
 }
 
-void draw_export_tab() {
-    ImGui::TextDisabled("Save currently-recorded slots as a shareable drill file.");
-    ImGui::Spacing();
-
-    if (!opendojo::subsystems::pool1()) {
-        ImGui::TextColored(ImVec4(1, 0.7f, 0.3f, 1),
-            "Pool1 not allocated yet. Enter practice mode and record once to initialize.");
-        return;
+void refresh_export_section() {
+    if (auto* p = el("export-populated")) {
+        std::size_t populated = 0;
+        if (opendojo::subsystems::pool1()) {
+            for (std::size_t i = 0; i < opendojo::slot::USER_SLOTS; ++i) {
+                if (opendojo::slot::is_populated(i)) ++populated;
+            }
+        }
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), "%zu / %zu",
+                      populated, opendojo::slot::USER_SLOTS);
+        p->SetInnerRML(buf);
     }
-
-    std::size_t populated = 0;
-    for (std::size_t i = 0; i < opendojo::slot::USER_SLOTS; ++i) {
-        if (opendojo::slot::is_populated(i)) ++populated;
-    }
-    ImGui::Text("Slots with recordings: %zu / %zu", populated, opendojo::slot::USER_SLOTS);
-
     auto cpu = opendojo::players::detect_cpu();
-    if (cpu.detected) {
-        ImGui::TextColored(ImVec4(0.55f, 0.95f, 0.65f, 1),
-            "Detected: %s (CPU on %s, id=%u)",
-            cpu.character_name.c_str(),
-            opendojo::players::side_to_string(cpu.cpu_side),
-            static_cast<unsigned>(cpu.character_id));
-    } else {
-        ImGui::TextColored(ImVec4(1, 0.7f, 0.3f, 1),
-            "Detected: not in a match (character/side will be \"unknown\")");
+    if (auto* c = el("export-character")) {
+        c->SetInnerRML(cpu.detected ? esc(cpu.character_name) : "Unknown");
+        c->SetClass("unset", !cpu.detected);
     }
-    ImGui::Spacing();
-
-    ImGui::PushItemWidth(420);
-    ImGui::InputText("Name",        g_state.export_name,        sizeof(g_state.export_name));
-    ImGui::InputText("Description", g_state.export_description, sizeof(g_state.export_description));
-    ImGui::InputText("Character",   g_state.export_character,   sizeof(g_state.export_character));
-    ImGui::PopItemWidth();
-
-    ImGui::TextDisabled(
-        "Name -> filename slug. Leave blank for timestamp.\n"
-        "Character: blank = use detected value above. Free-form lowercase tag overrides.");
-
-    ImGui::Spacing();
-
-    const bool can_export = populated > 0;
-    if (!can_export) ImGui::BeginDisabled();
-    if (ImGui::Button("Export", ImVec2(160, 0))) {
-        auto r = opendojo::commands::export_current_slots(
-            g_state.export_name,
-            g_state.export_description,
-            g_state.export_character,
-            "" /* cpu_side: always use detection */);
-        show_toast(r.message, !r.ok);
-        if (r.ok) {
-            g_state.export_name[0] = 0;
-            g_state.export_description[0] = 0;
-            g_state.drills_dirty = true;
-        }
+    if (auto* s = el("export-side")) {
+        s->SetInnerRML(cpu.detected
+            ? opendojo::players::side_to_string(cpu.cpu_side)
+            : "—");
     }
-    if (!can_export) ImGui::EndDisabled();
 }
 
-void draw_status_tab() {
+void refresh_status_section() {
     auto p1 = opendojo::subsystems::pool1();
-
-    ImGui::Text("Pool1: ");
-    ImGui::SameLine();
-    if (p1) ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.5f, 1), "ready (0x%llX)",
-                               static_cast<unsigned long long>(p1));
-    else    ImGui::TextColored(ImVec4(1, 0.7f, 0.3f, 1),
-                               "not allocated — record once in practice mode");
-
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
-
-    {
-        bool en = opendojo::autosave::is_enabled();
-        if (ImGui::Checkbox("Autosave/autoload per character", &en)) {
-            opendojo::autosave::set_enabled(en);
+    if (auto* p = el("status-pool")) {
+        if (p1) {
+            char buf[40];
+            std::snprintf(buf, sizeof(buf), "0x%llX",
+                          (unsigned long long)p1);
+            p->SetInnerRML(buf);
+            p->SetClass("set",   true);
+            p->SetClass("unset", false);
+        } else {
+            p->SetInnerRML("Not allocated");
+            p->SetClass("set",   false);
+            p->SetClass("unset", true);
         }
-        ImGui::TextDisabled(
-            "Saves your slot contents per CPU character when you switch chars or\n"
-            "leave practice. Restores them when you load that character again.");
     }
-
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
-
-    const ImGuiTableFlags flags = ImGuiTableFlags_Borders
-                                | ImGuiTableFlags_RowBg
-                                | ImGuiTableFlags_SizingStretchProp;
-    if (ImGui::BeginTable("slots", 2, flags)) {
-        ImGui::TableSetupColumn("Slot",   ImGuiTableColumnFlags_WidthFixed, 80.0f);
-        ImGui::TableSetupColumn("Events", ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableHeadersRow();
-
+    if (auto* b = el("btn-autosave")) {
+        b->SetInnerRML(opendojo::autosave::is_enabled() ? "On" : "Off");
+    }
+    if (auto* host = el("slot-list")) {
+        std::string rml;
         for (std::size_t i = 0; i < opendojo::slot::USER_SLOTS; ++i) {
-            ImGui::TableNextRow();
-            ImGui::TableSetColumnIndex(0);
-            ImGui::Text("%zu", i + 1);
-            ImGui::TableSetColumnIndex(1);
-            if (!p1) {
-                ImGui::TextDisabled("—");
-                continue;
-            }
-            if (!opendojo::slot::is_populated(i)) {
-                ImGui::TextDisabled("empty");
+            char idx[16]; std::snprintf(idx, sizeof(idx), "%zu", i + 1);
+            rml += "<div class='row'><span class='label'>Slot ";
+            rml += idx;
+            rml += "</span><span class='value ";
+            if (!p1 || !opendojo::slot::is_populated(i)) {
+                rml += "unset'>empty";
             } else {
-                auto n = opendojo::slot::event_count(i);
-                ImGui::Text("%u", static_cast<unsigned>(n));
+                rml += "set'>";
+                char cbuf[16];
+                std::snprintf(cbuf, sizeof(cbuf), "%u",
+                              (unsigned)opendojo::slot::event_count(i));
+                rml += cbuf;
+                rml += " events";
             }
+            rml += "</span></div>";
         }
-        ImGui::EndTable();
+        host->SetInnerRML(rml);
+    }
+}
+
+void refresh_settings_section() {
+    if (auto* h = el("settings-hotkey")) {
+        const auto vk = opendojo::config::toggle_vk();
+        if (opendojo::config::is_capturing()) {
+            h->SetInnerRML("Press any key… (Esc cancels)");
+            h->SetClass("unset", true);
+        } else {
+            h->SetInnerRML(esc(vk_name(vk)).c_str());
+            h->SetClass("unset", false);
+        }
+    }
+    if (auto* r = el("btn-rebind")) {
+        r->SetInnerRML(opendojo::config::is_capturing() ? "Cancel" : "Rebind…");
     }
 
-    ImGui::Spacing();
-    if (ImGui::Button("Dump to log")) opendojo::commands::show_status();
+    // Drain pending captured VK so the user sees their new key reflected.
+    auto pressed = opendojo::config::consume_captured_vk();
+    if (pressed != 0) {
+        opendojo::config::set_toggle_vk(pressed);
+        show_toast(std::string("Toggle bound to ") + vk_name(pressed));
+    }
 }
 
-void draw_about_tab() {
-    ImGui::TextUnformatted("OpenDojo — Tekken 8 practice-mode drill tool");
-    ImGui::Spacing();
-    ImGui::TextWrapped(
-        "Save and share practice-mode recordings as text drill files. "
-        "Each drill contains one or more recordings; loading places them "
-        "into the in-game slots so you can practice scenarios offline.");
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
-    ImGui::TextUnformatted("Toggle this menu: F12");
-    ImGui::Spacing();
-    ImGui::TextDisabled(
-        "v2 format. Hotkeys are disabled in this build while the menu UX "
-        "is being designed. Drill files live in opendojo_drills/ next to "
-        "the game executable.");
-}
-
-// ---- Toast (transient bottom-of-window status line) ------------------------
-
-void draw_toast() {
-    if (g_state.toast.text.empty()) return;
-    if (clock::now() > g_state.toast.until) {
-        g_state.toast.text.clear();
+void refresh_toast() {
+    auto* t = el("toast");
+    if (!t) return;
+    if (g.toast.text.empty() || clock::now() > g.toast.until) {
+        if (!g.toast.text.empty()) g.toast.text.clear();
+        t->SetInnerRML("");
+        t->SetClass("error", false);
         return;
     }
-    ImGui::Spacing();
-    const ImVec4 col = g_state.toast.is_error
-        ? ImVec4(1.0f, 0.55f, 0.40f, 1.0f)
-        : ImVec4(0.55f, 0.95f, 0.65f, 1.0f);
-    ImGui::TextColored(col, "%s", g_state.toast.text.c_str());
+    t->SetInnerRML(esc(g.toast.text));
+    t->SetClass("error", g.toast.is_error);
+}
+
+// ---- Event listener ---------------------------------------------------------
+
+class ClickListener : public Rml::EventListener {
+public:
+    explicit ClickListener(std::string action) : action_(std::move(action)) {}
+
+    void ProcessEvent(Rml::Event& ev) override {
+        if (action_ == "select_drills")   { g.section = Section::Drills;   apply_section(); g.drill_dom_dirty = true; }
+        else if (action_ == "select_export")   { g.section = Section::Export;   apply_section(); refresh_export_section(); }
+        else if (action_ == "select_status")   { g.section = Section::Status;   apply_section(); refresh_status_section(); }
+        else if (action_ == "select_settings") { g.section = Section::Settings; apply_section(); refresh_settings_section(); }
+        else if (action_ == "select_about")    { g.section = Section::About;    apply_section(); }
+        else if (action_ == "close")           { opendojo::render_hook::toggle_menu(); }
+        else if (action_ == "refresh") {
+            g.drills_dirty    = true;
+            g.drill_dom_dirty = true;
+            show_toast("Drill list refreshed");
+        }
+        else if (action_ == "toggle_filter") {
+            g.show_all_drills = !g.show_all_drills;
+            g.drill_dom_dirty = true;
+        }
+        else if (action_ == "export") {
+            std::string name, desc;
+            if (auto* e = el("export-name")) {
+                if (auto* in = dynamic_cast<Rml::ElementFormControlInput*>(e)) {
+                    name = in->GetValue();
+                }
+            }
+            if (auto* e = el("export-desc")) {
+                if (auto* in = dynamic_cast<Rml::ElementFormControlInput*>(e)) {
+                    desc = in->GetValue();
+                }
+            }
+            auto r = opendojo::commands::export_current_slots(name, desc, "", "");
+            show_toast(r.message, !r.ok);
+            if (r.ok) {
+                if (auto* e = el("export-name"))
+                    if (auto* in = dynamic_cast<Rml::ElementFormControlInput*>(e))
+                        in->SetValue("");
+                if (auto* e = el("export-desc"))
+                    if (auto* in = dynamic_cast<Rml::ElementFormControlInput*>(e))
+                        in->SetValue("");
+                g.drills_dirty = true;
+                g.drill_dom_dirty = true;
+            }
+        }
+        else if (action_ == "autosave") {
+            const bool en = !opendojo::autosave::is_enabled();
+            opendojo::autosave::set_enabled(en);
+            refresh_status_section();
+            show_toast(en ? "Autosave: On" : "Autosave: Off");
+        }
+        else if (action_ == "rebind") {
+            if (opendojo::config::is_capturing()) {
+                opendojo::config::cancel_capture();
+            } else {
+                opendojo::config::start_capture();
+            }
+            refresh_settings_section();
+        }
+        else if (action_ == "reset_hotkey") {
+            opendojo::config::set_toggle_vk(VK_F12);
+            refresh_settings_section();
+            show_toast("Toggle reset to F12");
+        }
+        else if (action_ == "drill_add" || action_ == "drill_replace") {
+            // Index encoded in data-drill-index on the clicked element.
+            auto* el_target = ev.GetTargetElement();
+            if (!el_target) return;
+            Rml::String idx_str;
+            if (!el_target->GetAttribute<Rml::String>("data-drill-index", "").empty()) {
+                idx_str = el_target->GetAttribute<Rml::String>("data-drill-index", "");
+            }
+            if (idx_str.empty()) return;
+            std::size_t idx = (std::size_t)std::strtoul(idx_str.c_str(), nullptr, 10);
+            if (idx >= g.drills.size()) return;
+            const auto& d = g.drills[idx];
+            using LM = opendojo::commands::LoadMode;
+            auto mode = action_ == "drill_add" ? LM::AppendToFree : LM::ReplaceAll;
+            auto r = opendojo::commands::load_drill(d.path, mode);
+            if (r.ok) opendojo::subsystems::mark_session_loaded(true);
+            show_toast(r.message, !r.ok);
+        }
+    }
+
+private:
+    std::string action_;
+};
+
+// Listeners are owned by this static array; we add them once and never
+// remove. Lifetime = process lifetime.
+std::vector<ClickListener*> g_listeners;
+
+void attach(const char* id, const char* action) {
+    auto* e = el(id);
+    if (!e) return;
+    auto* l = new ClickListener(action);
+    g_listeners.push_back(l);
+    e->AddEventListener("click", l);
+}
+
+// Drill rows are recreated on every list rebuild, so we attach a single
+// listener on the host element and use event bubbling: read the
+// data-action attribute on the clicked target.
+class DelegatingListener : public Rml::EventListener {
+public:
+    void ProcessEvent(Rml::Event& ev) override {
+        auto* tgt = ev.GetTargetElement();
+        if (!tgt) return;
+        Rml::String action = tgt->GetAttribute<Rml::String>("data-action", "");
+        if (action.empty()) return;
+        ClickListener tmp(std::string("drill_") + action.c_str());
+        tmp.ProcessEvent(ev);
+    }
+};
+DelegatingListener g_drill_listener;
+
+void wire_once() {
+    if (g.wired) return;
+    auto* doc = opendojo::rml_backend::document();
+    if (!doc) return;
+    g.wired = true;
+
+    attach("nav-drills",   "select_drills");
+    attach("nav-export",   "select_export");
+    attach("nav-status",   "select_status");
+    attach("nav-settings", "select_settings");
+    attach("nav-about",    "select_about");
+    attach("nav-close",    "close");
+
+    attach("btn-refresh",  "refresh");
+    attach("btn-filter",   "toggle_filter");
+    attach("btn-export",   "export");
+    attach("btn-autosave", "autosave");
+    attach("btn-rebind",   "rebind");
+    attach("btn-reset-hotkey", "reset_hotkey");
+
+    if (auto* host = el("drill-list")) {
+        host->AddEventListener("click", &g_drill_listener);
+    }
+
+    apply_section();
 }
 
 }  // anonymous namespace
 
 void invalidate() {
-    g_state.drills_dirty = true;
-    // Window just became visible: reclaim focus + initial nav target.
-    g_state.needs_focus  = true;
+    g.drills_dirty    = true;
+    g.drill_dom_dirty = true;
 }
 
 void draw() {
+    if (!opendojo::rml_backend::document()) return;
+    wire_once();
     refresh_drills_if_needed();
 
-    ImGuiViewport* vp = ImGui::GetMainViewport();
-    const ImVec2 size(720, 520);
-    const ImVec2 pos(vp->WorkPos.x + (vp->WorkSize.x - size.x) * 0.5f,
-                     vp->WorkPos.y + (vp->WorkSize.y - size.y) * 0.5f);
-    ImGui::SetNextWindowPos(pos,   ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(size, ImGuiCond_FirstUseEver);
-
-    if (g_state.needs_focus) {
-        // SetNextWindowFocus only takes effect once Begin runs. Pair it
-        // with SetItemDefaultFocus below on the first interactive widget
-        // so the gamepad/keyboard nav cursor starts somewhere visible.
-        ImGui::SetNextWindowFocus();
+    if (g.drill_dom_dirty) {
+        rebuild_drill_list();
+        g.drill_dom_dirty = false;
     }
+    if (g.section == Section::Export)   refresh_export_section();
+    if (g.section == Section::Status)   refresh_status_section();
+    if (g.section == Section::Settings) refresh_settings_section();
 
-    const ImGuiWindowFlags wflags = ImGuiWindowFlags_NoCollapse;
-    if (!ImGui::Begin("OPENDOJO", nullptr, wflags)) {
-        ImGui::End();
-        return;
-    }
-
-    if (ImGui::BeginTabBar("##tabs")) {
-        if (ImGui::BeginTabItem("Drills"))  {
-            // First-frame focus: anchor the nav cursor inside the tab
-            // so gamepad/keyboard can move around immediately.
-            if (g_state.needs_focus) ImGui::SetKeyboardFocusHere();
-            draw_drills_tab();
-            ImGui::EndTabItem();
-        }
-        if (ImGui::BeginTabItem("Export"))  { draw_export_tab();  ImGui::EndTabItem(); }
-        if (ImGui::BeginTabItem("Status"))  { draw_status_tab();  ImGui::EndTabItem(); }
-        if (ImGui::BeginTabItem("About"))   { draw_about_tab();   ImGui::EndTabItem(); }
-        ImGui::EndTabBar();
-    }
-
-    draw_toast();
-    ImGui::End();
-
-    g_state.needs_focus = false;
+    refresh_toast();
 }
 
 }  // namespace opendojo::menu

@@ -12,9 +12,9 @@ Font swap (drop-in)
 
 1. Extract a TrueType font from Tekken's `.pak` archives — see
    "Extracting assets" below.
-2. Save it as `opendojo.ttf` under:
+2. Save it as `BebasNeue.ttf` under:
 
-       <game>/Polaris/Binaries/Win64/Mods/OpenDojo/font/opendojo.ttf
+       <game>/Polaris/Binaries/Win64/Mods/OpenDojo/font/BebasNeue.ttf
 
 3. Relaunch the game. The DLL's `try_load_custom_font` finds the file at
    ImGui init time and uses it as the menu's default font (18 px).
@@ -57,7 +57,7 @@ Tekken 8's assets live in IoStore archives under
 
 ### Verifying the extracted TTF
 
-`opendojo.ttf` should be a vanilla TrueType file (starts with bytes
+`BebasNeue.ttf` should be a vanilla TrueType file (starts with bytes
 `00 01 00 00` or `OTTO`). If it starts with UE-asset magic (e.g.
 `C1 83 2A 9E`) you grabbed the raw .uasset, not the inlined font
 payload — re-extract from the FontFace sub-object's `Inline` payload.

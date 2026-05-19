@@ -9,13 +9,13 @@
 // Top-level OpenDojo operations. The menu is the primary consumer; hotkeys
 // are deferred until we lock down the menu UX.
 //
-// All filesystem state lives under <game>\Polaris\Binaries\Win64\opendojo_drills\.
+// All filesystem state lives under <game>\Polaris\Binaries\Win64\opendojo\.
 // Each file is one v2 drill (one or more recordings); the filename is a
 // slug of the drill's `name` field with a `_2`/`_3` collision suffix.
 
 namespace opendojo::commands {
 
-// Absolute path of the opendojo_drills/ directory next to the game exe.
+// Absolute path of the opendojo/ data directory next to the game exe.
 // Returned for every call — no caching, in case the game gets moved.
 std::filesystem::path drills_dir();
 
@@ -30,7 +30,7 @@ struct DrillHeader {
     std::size_t            recording_count = 0;
 };
 
-// Scan opendojo_drills/ and return one entry per .drill file. Errors per
+// Scan opendojo/ and return one entry per .drill file. Errors per
 // file are silently skipped (the menu shouldn't disappear because one file
 // is malformed). Sorted by name.
 std::vector<DrillHeader> list_drills();

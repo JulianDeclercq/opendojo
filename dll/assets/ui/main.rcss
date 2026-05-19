@@ -1,0 +1,453 @@
+/* ============================================================================
+ * OpenDojo — Tekken 8 practice menu styling.
+ *
+ * Visual reference: Tekken 8 Practice Settings panel. A translucent dark
+ * panel split into a left nav column and a right detail column. Selected
+ * row in the left column carries a horizontal crimson-to-dark-red gradient
+ * with a bright pink left edge. Detail-row values are cyan-teal. The
+ * bottom of the panel is a help strip + footer hint bar.
+ * ========================================================================== */
+
+/* ----- Globals ---------------------------------------------------------- */
+/*
+ * Bebas Neue Pro is Tekken's UI face. Unlike vanilla Bebas Neue this Pro
+ * cut has lowercase glyphs, so row labels read like prose. Bahnschrift
+ * (system) is loaded after as a glyph fallback only.
+ */
+
+body
+{
+    font-family: "Bebas Neue Pro";
+    font-size: 17dp;
+    font-weight: normal;
+    color: #f3ece0;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+}
+
+div, nav, main, section, header, footer, span, button, input
+{
+    box-sizing: border-box;
+}
+
+/* The whole menu panel. Single big dark gradient — the visible purple
+   wash that gives the Tekken look comes from the gradient stops, not from
+   a separate dim layer. */
+#window
+{
+    position: absolute;
+    left: 4%;
+    top: 8%;
+    width: 92%;
+    height: 84%;
+
+    decorator: gradient( vertical rgba(44,30,72,235) rgba(20,14,40,238) );
+
+    border-width: 0;
+}
+
+/* ----- Layout: sidebar + content --------------------------------------- */
+
+#layout
+{
+    display: flex;
+    flex-direction: row;
+    width: 100%;
+    height: 86%;
+}
+
+/* Left column. Slightly darker than the right column to set them apart
+   and to match Tekken's two-tone split. */
+#sidebar
+{
+    width: 33%;
+    height: 100%;
+    padding: 8dp 0;
+
+    decorator: gradient( vertical rgba(38,22,56,250) rgba(20,12,36,250) );
+}
+
+.navitem
+{
+    display: block;
+    width: 100%;
+    height: 36dp;
+    line-height: 36dp;
+    padding: 0 26dp;
+    color: #efe7d8;
+    font-size: 17dp;
+    font-weight: normal;
+    cursor: pointer;
+}
+
+.navitem:hover
+{
+    background-color: rgba(120, 36, 64, 0.22);
+    color: #fff7e8;
+}
+
+.navitem .navtext
+{
+    /* The text node must NOT wrap to its own line — keep it inline so the
+       row height stays at 36dp and the gradient (drawn on the parent) is
+       what the user sees as the selection bar. */
+    display: inline;
+    color: inherit;
+}
+
+.navitem.selected
+{
+    /* Tekken's crimson highlight: bright pink-red on the left fading into
+       a deep dark red on the right. */
+    decorator: gradient( horizontal rgba(232,46,84,255) rgba(106,16,32,235) );
+    color: #ffffff;
+    font-weight: bold;
+}
+
+.navitem.selected .navtext
+{
+    color: #ffffff;
+}
+
+/* ----- Content pane ----------------------------------------------------- */
+
+#content
+{
+    width: 67%;
+    height: 100%;
+    overflow-y: auto;
+    padding: 0;
+
+    decorator: gradient( vertical rgba(20,14,38,235) rgba(10,8,24,235) );
+}
+
+.section
+{
+    width: 100%;
+}
+
+.section.hidden
+{
+    display: none;
+}
+
+/* Each row: 'label' on the left, 'value' or button on the right. */
+.row
+{
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+
+    width: 100%;
+    height: 36dp;
+    padding: 0 26dp;
+    line-height: 36dp;
+
+    border-bottom-width: 1dp;
+    border-bottom-color: rgba(255, 255, 255, 0.04);
+}
+
+.row:hover
+{
+    background-color: rgba(160, 110, 200, 0.06);
+}
+
+.row.row-meta
+{
+    height: 28dp;
+    line-height: 28dp;
+    color: #b4a8b8;
+    font-size: 13dp;
+}
+
+.row.row-meta .value
+{
+    font-size: 13dp;
+    color: #f0b04a;
+}
+
+.row.row-action
+{
+    color: #efe7d8;
+}
+
+.row.note
+{
+    height: auto;
+    min-height: 32dp;
+    padding-top: 8dp;
+    padding-bottom: 8dp;
+    color: #a89aa4;
+    font-size: 13dp;
+    border-bottom-width: 0;
+}
+
+.row.about-row
+{
+    height: auto;
+    min-height: 28dp;
+    padding-top: 6dp;
+    padding-bottom: 6dp;
+    border-bottom-width: 0;
+    color: #d8cab8;
+}
+
+.label
+{
+    flex: 1 1 auto;
+    color: inherit;
+    font-size: 16dp;
+}
+
+.value
+{
+    /* Tekken renders 'state-name' values in a bright cyan/teal. */
+    color: #6cdcde;
+    font-weight: normal;
+    font-size: 16dp;
+    text-align: right;
+}
+
+.value.unset
+{
+    /* "Not Set" in Tekken is the same cyan — it isn't a distinct error
+       colour, just a state with a different label. */
+    color: #6cdcde;
+}
+
+.value.set
+{
+    color: #6cdcde;
+}
+
+.value-btn
+{
+    display: inline-block;
+    color: #6cdcde;
+    font-weight: normal;
+    font-size: 16dp;
+    text-align: right;
+    background: transparent;
+    padding: 0 6dp;
+    height: 30dp;
+    line-height: 30dp;
+    border-width: 0;
+    cursor: pointer;
+}
+
+.value-btn:hover
+{
+    color: #ffffff;
+    decorator: gradient( horizontal rgba(232,46,84,140) rgba(106,16,32,140) );
+}
+
+.value-btn.primary
+{
+    color: #ffffff;
+    decorator: gradient( horizontal rgba(232,46,84,255) rgba(106,16,32,235) );
+    padding: 0 18dp;
+    font-weight: bold;
+}
+
+.value-btn:active,
+.value-btn.primary:active
+{
+    decorator: gradient( horizontal rgba(140,18,32,255) rgba(80,8,20,255) );
+    color: #ffe6a8;
+}
+
+/* Inline drill rows: tighter, with an Add/Replace pair on the right. */
+.drill-row
+{
+    height: 40dp;
+}
+
+.drill-row .drill-name
+{
+    flex: 1 1 auto;
+    color: #efe7d8;
+    font-size: 16dp;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.drill-row .drill-meta
+{
+    color: #9c8b9c;
+    font-size: 13dp;
+    margin-right: 14dp;
+    min-width: 150dp;
+    text-align: right;
+}
+
+.drill-row .drill-actions
+{
+    display: flex;
+    flex-direction: row;
+}
+
+.drill-row .drill-btn
+{
+    width: 80dp;
+    height: 26dp;
+    line-height: 26dp;
+    text-align: center;
+    color: #6cdcde;
+    font-size: 13dp;
+    font-weight: bold;
+    margin-left: 8dp;
+    cursor: pointer;
+}
+
+.drill-row .drill-btn:hover
+{
+    decorator: gradient( horizontal rgba(232,46,84,220) rgba(106,16,32,220) );
+    color: #ffffff;
+}
+
+.drill-row .drill-btn.replace:hover
+{
+    color: #ffffff;
+}
+
+.drill-empty
+{
+    color: #a89aa4;
+}
+
+/* Inputs (export form). */
+.row.row-input
+{
+    height: 40dp;
+}
+
+input.text, input
+{
+    width: 280dp;
+    height: 26dp;
+    line-height: 26dp;
+    padding: 0 8dp;
+    color: #ffffff;
+    background-color: rgba(0, 0, 0, 0.32);
+    border-width: 1dp;
+    border-color: rgba(180, 80, 110, 0.30);
+    font-size: 15dp;
+    cursor: text;
+    text-align: right;
+}
+
+input:focus
+{
+    border-color: #f0b04a;
+}
+
+/* ----- Bottom strip mirrors the Tekken help line. ---------------------- */
+
+#strip
+{
+    position: absolute;
+    left: 4%;
+    bottom: 42dp;
+    width: 92%;
+    height: 36dp;
+    line-height: 36dp;
+    padding: 0 26dp;
+    color: #d8cab8;
+    font-size: 13dp;
+
+    decorator: gradient( vertical rgba(22,14,38,255) rgba(14,10,28,255) );
+}
+
+#strip-text
+{
+    /* Underline mirrors the help line in Tekken's screenshot. */
+    color: #c6b4c0;
+    text-decoration: underline;
+}
+
+/* ----- Footer hints ----------------------------------------------------- */
+
+#hints
+{
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 42dp;
+    padding: 0 28dp;
+    line-height: 42dp;
+    color: #d8d4c4;
+    font-size: 14dp;
+
+    background-color: rgba(8,5,16,250);
+}
+
+.hint
+{
+    display: inline-block;
+    margin-right: 26dp;
+    color: #d8d4c4;
+    font-size: 13dp;
+}
+
+/* Glyph: small circle the same colour family as Tekken's controller icons.
+   We can't easily render the exact PlayStation cross/circle/triangle/square
+   shapes without sprites, so use a flat dark grey pill that sits next to
+   the action label. */
+.glyph
+{
+    display: inline-block;
+    width: 22dp;
+    height: 22dp;
+    line-height: 22dp;
+    text-align: center;
+    margin-right: 8dp;
+    color: #f0e8d8;
+    font-size: 12dp;
+    font-weight: bold;
+    background-color: rgba(60, 50, 70, 0.80);
+    border-width: 1dp;
+    border-color: rgba(200, 180, 200, 0.20);
+}
+
+.hint-label
+{
+    color: #d8cab8;
+}
+
+/* Toast: transient feedback at the right edge of the footer. */
+.toast
+{
+    float: right;
+    color: #f0b04a;
+    font-size: 13dp;
+}
+
+.toast.error
+{
+    color: #ff7a5a;
+}
+
+/* Scrollbar styling ----------------------------------------------------- */
+
+scrollbarvertical
+{
+    width: 8dp;
+    background-color: rgba(0,0,0,0.25);
+}
+scrollbarvertical sliderbar
+{
+    background-color: rgba(232, 46, 84, 0.70);
+    border-width: 0;
+}
+scrollbarvertical sliderbar:hover
+{
+    background-color: rgba(232, 46, 84, 0.95);
+}
+scrollbarvertical sliderarrowdec,
+scrollbarvertical sliderarrowinc
+{
+    height: 0;
+}
