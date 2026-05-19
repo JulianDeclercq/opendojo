@@ -9,8 +9,6 @@
 
 #include "autosave.hpp"
 #include "commands.hpp"
-#include "dialog.hpp"
-#include "drill_browser.hpp"
 #include "log.hpp"
 #include "players.hpp"
 #include "slot.hpp"
@@ -41,6 +39,11 @@ struct State {
     char export_name[96]        = "";
     char export_description[160] = "";
     char export_character[32]   = "";
+
+    // Set whenever the window transitions from hidden -> visible. Used
+    // to claim window focus + set initial nav focus on the first frame
+    // so gamepad / keyboard can start navigating without a mouse click.
+    bool needs_focus = true;
 
     ToastState toast;
 };
@@ -295,50 +298,6 @@ void draw_status_tab() {
     if (ImGui::Button("Dump to log")) opendojo::commands::show_status();
 }
 
-// Native-dialog Phase-1 diagnostics. Two buttons:
-//   1. Resolve + dump the BPFL CDO's vtable so we can pin ProcessEvent.
-//   2. Open a single-button Polaris dialog via ProcessEvent.
-// See dll/DLL_PIVOT_PLAN.md.
-void draw_native_tab() {
-    ImGui::TextDisabled(
-        "Phase-1: UPolarisDialogFunctionLibrary via ProcessEvent. Step 1\n"
-        "(dump) prints the BPFL CDO's vtable so we can identify which\n"
-        "slot is ProcessEvent. Step 2 (open) tries the call using the\n"
-        "slot currently baked into the build (default 67).");
-    ImGui::Spacing();
-
-    // Drill browser — primary entry point once the .pak ships.
-    if (ImGui::Button("Browse drills (native)")) {
-        bool ok = opendojo::drill_browser::open();
-        show_toast(ok ? "Drill browser opened"
-                      : "Drill browser failed — is the .pak deployed?",
-                   !ok);
-    }
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::TextDisabled("Diagnostics");
-
-    if (ImGui::Button("Resolve + dump PE vtable")) {
-        opendojo::dialog::dump_pe_vtable();
-        show_toast("Dumped vtable to opendojo.log");
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Open test dialog")) {
-        bool ok = opendojo::dialog::open_test_dialog("OpenDojo", "Close");
-        show_toast(ok ? "OpenDialog dispatched" : "OpenDialog failed (see log)",
-                   !ok);
-    }
-    if (ImGui::Button("Check dialog manager state")) {
-        opendojo::dialog::log_dialog_manager_state();
-        show_toast("Manager state logged");
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Force-init dialog manager")) {
-        opendojo::dialog::force_init_dialog_manager();
-        show_toast("Force-init attempted (see log)");
-    }
-}
-
 void draw_about_tab() {
     ImGui::TextUnformatted("OpenDojo — Tekken 8 practice-mode drill tool");
     ImGui::Spacing();
@@ -376,6 +335,8 @@ void draw_toast() {
 
 void invalidate() {
     g_state.drills_dirty = true;
+    // Window just became visible: reclaim focus + initial nav target.
+    g_state.needs_focus  = true;
 }
 
 void draw() {
@@ -388,6 +349,13 @@ void draw() {
     ImGui::SetNextWindowPos(pos,   ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(size, ImGuiCond_FirstUseEver);
 
+    if (g_state.needs_focus) {
+        // SetNextWindowFocus only takes effect once Begin runs. Pair it
+        // with SetItemDefaultFocus below on the first interactive widget
+        // so the gamepad/keyboard nav cursor starts somewhere visible.
+        ImGui::SetNextWindowFocus();
+    }
+
     const ImGuiWindowFlags wflags = ImGuiWindowFlags_NoCollapse;
     if (!ImGui::Begin("OPENDOJO", nullptr, wflags)) {
         ImGui::End();
@@ -395,16 +363,23 @@ void draw() {
     }
 
     if (ImGui::BeginTabBar("##tabs")) {
-        if (ImGui::BeginTabItem("Drills"))  { draw_drills_tab();  ImGui::EndTabItem(); }
+        if (ImGui::BeginTabItem("Drills"))  {
+            // First-frame focus: anchor the nav cursor inside the tab
+            // so gamepad/keyboard can move around immediately.
+            if (g_state.needs_focus) ImGui::SetKeyboardFocusHere();
+            draw_drills_tab();
+            ImGui::EndTabItem();
+        }
         if (ImGui::BeginTabItem("Export"))  { draw_export_tab();  ImGui::EndTabItem(); }
         if (ImGui::BeginTabItem("Status"))  { draw_status_tab();  ImGui::EndTabItem(); }
-        if (ImGui::BeginTabItem("Native"))  { draw_native_tab();  ImGui::EndTabItem(); }
         if (ImGui::BeginTabItem("About"))   { draw_about_tab();   ImGui::EndTabItem(); }
         ImGui::EndTabBar();
     }
 
     draw_toast();
     ImGui::End();
+
+    g_state.needs_focus = false;
 }
 
 }  // namespace opendojo::menu
