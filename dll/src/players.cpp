@@ -30,10 +30,10 @@ constexpr const char* PAT_MAIN_INFO =
     "40 53 48 83 EC 20 48 8B 1D ?? ?? ?? ?? 48 85 DB 74 ?? BA 01 00 00 00";
 
 // Player struct field offsets (T8 v3.00.02).
-constexpr std::ptrdiff_t OFF_CHARACTER_ID = 0x168;   // u32
+constexpr std::ptrdiff_t OFF_CHARACTER_ID = 0x168;  // u32
 
 // PlayerInfo field offset.
-constexpr std::ptrdiff_t OFF_PLAYER_ID    = 0x05;    // u8: 0=human is P1, 1=human is P2
+constexpr std::ptrdiff_t OFF_PLAYER_ID = 0x05;  // u8: 0=human is P1, 1=human is P2
 
 // GlobalPlayerHolder layout — we only need the two Player* slots.
 constexpr std::ptrdiff_t HOLDER_P1 = 0x30;
@@ -50,8 +50,8 @@ constexpr std::ptrdiff_t INFO_STEP_4 = 0x20;
 // ---------------------------------------------------------------------------
 
 struct CompiledPattern {
-    std::vector<std::uint8_t> bytes;       // exact byte values (0 where wildcard)
-    std::vector<std::uint8_t> mask;        // 1 = compare, 0 = wildcard
+    std::vector<std::uint8_t> bytes;  // exact byte values (0 where wildcard)
+    std::vector<std::uint8_t> mask;   // 1 = compare, 0 = wildcard
 };
 
 // Parse "4C 89 ?? 35" -> {{0x4C, 0x89, 0x00, 0x35}, {1, 1, 0, 1}}.
@@ -60,13 +60,23 @@ bool compile_pattern(const char* p, CompiledPattern& out) {
     out.bytes.clear();
     out.mask.clear();
     auto hex_nibble = [](char c, int& v) {
-        if (c >= '0' && c <= '9') { v = c - '0'; return true; }
-        if (c >= 'A' && c <= 'F') { v = c - 'A' + 10; return true; }
-        if (c >= 'a' && c <= 'f') { v = c - 'a' + 10; return true; }
+        if (c >= '0' && c <= '9') {
+            v = c - '0';
+            return true;
+        }
+        if (c >= 'A' && c <= 'F') {
+            v = c - 'A' + 10;
+            return true;
+        }
+        if (c >= 'a' && c <= 'f') {
+            v = c - 'a' + 10;
+            return true;
+        }
         return false;
     };
     while (*p) {
-        while (*p == ' ' || *p == '\t') ++p;
+        while (*p == ' ' || *p == '\t')
+            ++p;
         if (!*p) break;
         if (p[0] == '?' && p[1] == '?') {
             out.bytes.push_back(0);
@@ -97,7 +107,7 @@ bool get_text_range(std::uintptr_t& start, std::size_t& size) {
         const auto& s = first[i];
         if (std::strncmp(reinterpret_cast<const char*>(s.Name), ".text", 5) == 0) {
             start = base + s.VirtualAddress;
-            size  = s.Misc.VirtualSize;
+            size = s.Misc.VirtualSize;
             return true;
         }
     }
@@ -110,20 +120,24 @@ std::uintptr_t scan(const CompiledPattern& pat, std::uintptr_t start, std::size_
     if (pat.bytes.empty() || size < pat.bytes.size()) return 0;
     const auto base = reinterpret_cast<const std::uint8_t*>(start);
     const std::size_t span = size - pat.bytes.size() + 1;
-    const std::size_t n    = pat.bytes.size();
+    const std::size_t n = pat.bytes.size();
     std::uintptr_t first_hit = 0;
     int hits = 0;
     for (std::size_t i = 0; i < span; ++i) {
         bool match = true;
         for (std::size_t j = 0; j < n; ++j) {
-            if (pat.mask[j] && base[i + j] != pat.bytes[j]) { match = false; break; }
+            if (pat.mask[j] && base[i + j] != pat.bytes[j]) {
+                match = false;
+                break;
+            }
         }
         if (match) {
             if (!first_hit) first_hit = start + i;
             if (++hits >= 2) {
-                OPENDOJO_LOG("players: WARNING pattern matched %d+ times "
-                             "(first=0x%llX)",
-                             hits, static_cast<unsigned long long>(first_hit));
+                OPENDOJO_LOG(
+                    "players: WARNING pattern matched %d+ times "
+                    "(first=0x%llX)",
+                    hits, static_cast<unsigned long long>(first_hit));
                 break;
             }
         }
@@ -142,20 +156,20 @@ std::uintptr_t rip_relative(std::uintptr_t at) {
 // ---------------------------------------------------------------------------
 
 struct Resolved {
-    std::uintptr_t holder_global_slot = 0;   // *holder_global_slot = GlobalPlayerHolder
-    std::uintptr_t info_global_slot   = 0;   // *info_global_slot   = lvl1 of info chain
-    bool           attempted          = false;
-    bool           ok                 = false;
+    std::uintptr_t holder_global_slot = 0;  // *holder_global_slot = GlobalPlayerHolder
+    std::uintptr_t info_global_slot = 0;    // *info_global_slot   = lvl1 of info chain
+    bool attempted = false;
+    bool ok = false;
 };
 
 std::once_flag g_resolve_once;
-Resolved       g_resolved;
+Resolved g_resolved;
 
 void do_resolve() {
     g_resolved.attempted = true;
 
     std::uintptr_t text_start = 0;
-    std::size_t    text_size  = 0;
+    std::size_t text_size = 0;
     if (!get_text_range(text_start, text_size)) {
         OPENDOJO_LOG("players: couldn't locate Polaris .text section");
         return;
@@ -168,17 +182,18 @@ void do_resolve() {
     }
 
     auto hit_players = scan(pp, text_start, text_size);
-    auto hit_info    = scan(pi, text_start, text_size);
+    auto hit_info = scan(pi, text_start, text_size);
     if (!hit_players || !hit_info) {
-        OPENDOJO_LOG("players: pattern miss (players=0x%llX info=0x%llX) — "
-                     "game version may have shifted",
-                     static_cast<unsigned long long>(hit_players),
-                     static_cast<unsigned long long>(hit_info));
+        OPENDOJO_LOG(
+            "players: pattern miss (players=0x%llX info=0x%llX) — "
+            "game version may have shifted",
+            static_cast<unsigned long long>(hit_players),
+            static_cast<unsigned long long>(hit_info));
         return;
     }
 
     g_resolved.holder_global_slot = rip_relative(hit_players + 3);
-    g_resolved.info_global_slot   = rip_relative(hit_info + 9);
+    g_resolved.info_global_slot = rip_relative(hit_info + 9);
     g_resolved.ok = true;
     OPENDOJO_LOG("players: resolved holder@0x%llX info@0x%llX",
                  static_cast<unsigned long long>(g_resolved.holder_global_slot),
@@ -196,16 +211,16 @@ bool ensure_resolved() {
 
 const char* character_name_internal(std::uint32_t id) {
     switch (id) {
-        case  0: return "paul";
-        case  1: return "law";
-        case  2: return "king";
-        case  3: return "yoshimitsu";
-        case  4: return "hwoarang";
-        case  5: return "xiaoyu";
-        case  6: return "jin";
-        case  7: return "bryan";
-        case  8: return "kazuya";
-        case  9: return "steve";
+        case 0: return "paul";
+        case 1: return "law";
+        case 2: return "king";
+        case 3: return "yoshimitsu";
+        case 4: return "hwoarang";
+        case 5: return "xiaoyu";
+        case 6: return "jin";
+        case 7: return "bryan";
+        case 8: return "kazuya";
+        case 9: return "steve";
         case 10: return "jack8";
         case 11: return "asuka";
         case 12: return "devil_jin";
@@ -245,7 +260,7 @@ const char* character_name_internal(std::uint32_t id) {
         case 121: return "story_devil_jin";
         case 122: return "tekken_monk";
         case 123: return "seiryu";
-        default:  return nullptr;
+        default: return nullptr;
     }
 }
 
@@ -264,8 +279,14 @@ const char* side_to_string(Side s) {
 }
 
 bool parse_side(std::string_view s, Side& out) {
-    if (s == "p1" || s == "P1" || s == "1p" || s == "1P") { out = Side::p1; return true; }
-    if (s == "p2" || s == "P2" || s == "2p" || s == "2P") { out = Side::p2; return true; }
+    if (s == "p1" || s == "P1" || s == "1p" || s == "1P") {
+        out = Side::p1;
+        return true;
+    }
+    if (s == "p2" || s == "P2" || s == "2p" || s == "2P") {
+        out = Side::p2;
+        return true;
+    }
     return false;
 }
 
@@ -274,7 +295,7 @@ CpuInfo detect_cpu() {
     if (!ensure_resolved()) return c;
 
     auto holder = memory::read_u64(g_resolved.holder_global_slot);
-    if (!holder) return c;                              // not in a match
+    if (!holder) return c;  // not in a match
 
     auto p1 = memory::read_u64(holder + HOLDER_P1);
     auto p2 = memory::read_u64(holder + HOLDER_P2);
@@ -292,7 +313,7 @@ CpuInfo detect_cpu() {
     const bool human_is_p1 = (human_player_id == 0);
 
     auto cpu_ptr = human_is_p1 ? p2 : p1;
-    c.cpu_side     = human_is_p1 ? Side::p2 : Side::p1;
+    c.cpu_side = human_is_p1 ? Side::p2 : Side::p1;
     c.character_id = memory::read_u32(cpu_ptr + OFF_CHARACTER_ID);
     if (auto name = character_name_internal(c.character_id)) {
         c.character_name = name;

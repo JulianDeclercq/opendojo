@@ -21,23 +21,23 @@
 
 namespace opendojo::slot {
 
-inline constexpr std::size_t   SLOT_PITCH = 0x1C22;  // 7202 bytes per slot
-inline constexpr std::size_t   USER_SLOTS = 8;
+inline constexpr std::size_t SLOT_PITCH = 0x1C22;  // 7202 bytes per slot
+inline constexpr std::size_t USER_SLOTS = 8;
 
 // Per-slot "is recorded" flag inside the gameplay subsystem.
 // Each entry is 8 bytes; the flag uint32 sits at +4 within its entry.
-inline constexpr std::uintptr_t GAMEPLAY_SLOT_BASE   = 0x480;
+inline constexpr std::uintptr_t GAMEPLAY_SLOT_BASE = 0x480;
 inline constexpr std::uintptr_t GAMEPLAY_SLOT_STRIDE = 0x08;
-inline constexpr std::uintptr_t GAMEPLAY_SLOT_FLAG   = 0x04;
+inline constexpr std::uintptr_t GAMEPLAY_SLOT_FLAG = 0x04;
 
 // Result codes for any operation that touches subsystems. Read-only ops
 // (read, event_count, address) don't return this — they just return 0 / false
 // since they only need pool1 to be allocated.
 enum class WriteStatus {
     Ok,
-    InvalidSlot,         // slot_idx out of range
-    PoolNotAllocated,    // pool1 ptr still 0 — record once in practice first
-    NotInPracticeMode,   // a subsystem lookup returned 0 — user left the scene
+    InvalidSlot,        // slot_idx out of range
+    PoolNotAllocated,   // pool1 ptr still 0 — record once in practice first
+    NotInPracticeMode,  // a subsystem lookup returned 0 — user left the scene
 };
 
 // Human-readable rendering for log lines.

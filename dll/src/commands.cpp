@@ -25,25 +25,9 @@ namespace opendojo::commands {
 std::filesystem::path drills_dir() {
     wchar_t buf[MAX_PATH];
     DWORD n = GetModuleFileNameW(nullptr, buf, MAX_PATH);
-    auto root = (n > 0 && n < MAX_PATH)
-        ? std::filesystem::path(buf).parent_path()
-        : std::filesystem::path(L".");
-    auto target = root / L"opendojo";
-
-    // One-time migration: prior versions stored data under "opendojo_drills".
-    // Rename if that legacy folder exists and the new path doesn't.
-    static bool migrated = false;
-    if (!migrated) {
-        migrated = true;
-        auto legacy = root / L"opendojo_drills";
-        std::error_code ec;
-        if (std::filesystem::exists(legacy, ec)
-            && !std::filesystem::exists(target, ec)) {
-            std::filesystem::rename(legacy, target, ec);
-            // Best-effort; if rename fails the user can rename manually.
-        }
-    }
-    return target;
+    auto root = (n > 0 && n < MAX_PATH) ? std::filesystem::path(buf).parent_path()
+                                        : std::filesystem::path(L".");
+    return root / L"opendojo";
 }
 
 namespace {
@@ -95,20 +79,27 @@ bool parse_header_only(const std::filesystem::path& path, DrillHeader& out) {
         // Trim ascii whitespace.
         auto trim = [](std::string& s) {
             std::size_t a = 0;
-            while (a < s.size() && (s[a] == ' ' || s[a] == '\t')) ++a;
+            while (a < s.size() && (s[a] == ' ' || s[a] == '\t'))
+                ++a;
             std::size_t b = s.size();
-            while (b > a && (s[b - 1] == ' ' || s[b - 1] == '\t')) --b;
+            while (b > a && (s[b - 1] == ' ' || s[b - 1] == '\t'))
+                --b;
             s = s.substr(a, b - a);
         };
         trim(key);
         trim(val);
-        if      (key == "name")        out.name = val;
-        else if (key == "description") out.description = val;
-        else if (key == "character")   out.character = val;
-        else if (key == "cpu_side")    out.cpu_side = val;
-        else if (key == "recordings")  {
-            try { out.recording_count = static_cast<std::size_t>(std::stoul(val)); }
-            catch (...) { out.recording_count = 0; }
+        if (key == "name")
+            out.name = val;
+        else if (key == "description")
+            out.description = val;
+        else if (key == "character")
+            out.character = val;
+        else if (key == "cpu_side")
+            out.cpu_side = val;
+        else if (key == "recordings") {
+            try {
+                out.recording_count = static_cast<std::size_t>(std::stoul(val));
+            } catch (...) { out.recording_count = 0; }
         }
     }
     if (out.character.empty()) out.character = "unknown";
@@ -135,13 +126,12 @@ std::string timestamp_name() {
     std::tm tm{};
     localtime_s(&tm, &t);
     char buf[64];
-    std::snprintf(buf, sizeof(buf), "drill_%04d%02d%02d_%02d%02d%02d",
-                  tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
-                  tm.tm_hour, tm.tm_min, tm.tm_sec);
+    std::snprintf(buf, sizeof(buf), "drill_%04d%02d%02d_%02d%02d%02d", tm.tm_year + 1900,
+                  tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
     return buf;
 }
 
-}  // anonymous
+}  // namespace
 
 // ---------------------------------------------------------------------------
 
@@ -180,63 +170,41 @@ LoadResult load_drill(const std::filesystem::path& path, LoadMode mode) {
     auto& d = decoded.drill;
 
     if (!opendojo::subsystems::pool1()) {
-        r.message = "pool1 not allocated — record once in practice mode first";
+        r.message = "not ready - record once in practice mode first";
         return r;
     }
 
     if (d.recordings.size() > opendojo::slot::USER_SLOTS) {
         char buf[128];
-        std::snprintf(buf, sizeof(buf), "drill has %zu recordings (max %zu)",
-                      d.recordings.size(), opendojo::slot::USER_SLOTS);
+        std::snprintf(buf, sizeof(buf), "drill has %zu recordings (max %zu)", d.recordings.size(),
+                      opendojo::slot::USER_SLOTS);
         r.message = buf;
         return r;
     }
 
-    // Bisect markers for narrowing where the round-intro input freeze
-    // comes from. Each marker file (empty file inside opendojo/)
-    // disables one component of the load. Defaults (no markers) match
-    // pre-bisect behavior.
-    auto dbg_skip = [](const char* name) {
-        std::error_code ec;
-        return std::filesystem::exists(drills_dir() / name, ec);
-    };
-    const bool skip_pre_clear  = dbg_skip("_dbg_skip_pre_clear");
-    const bool skip_slot_bytes = dbg_skip("_dbg_skip_slot_bytes");
-    const bool skip_set_flag   = dbg_skip("_dbg_skip_set_flag");
-    OPENDOJO_LOG("load_drill: bisect — pre_clear=%s slot_bytes=%s set_flag=%s",
-                 skip_pre_clear  ? "SKIP" : "run",
-                 skip_slot_bytes ? "SKIP" : "run",
-                 skip_set_flag   ? "SKIP" : "run");
-
     if (mode == LoadMode::ReplaceAll) {
-        if (!skip_pre_clear) {
-            for (std::size_t i = 0; i < opendojo::slot::USER_SLOTS; ++i) {
-                opendojo::slot::set_recorded_flag(i, false);
-            }
+        for (std::size_t i = 0; i < opendojo::slot::USER_SLOTS; ++i) {
+            opendojo::slot::set_recorded_flag(i, false);
         }
         for (std::size_t i = 0; i < d.recordings.size(); ++i) {
-            if (!skip_slot_bytes) {
-                auto addr = opendojo::slot::address(i);
-                if (!addr) {
-                    r.message = "pool not allocated";
-                    return r;
-                }
-                opendojo::memory::write_bytes(
-                    addr, d.recordings[i].slot_bytes.data(), opendojo::slot::SLOT_PITCH);
+            auto addr = opendojo::slot::address(i);
+            if (!addr) {
+                r.message = "pool not allocated";
+                return r;
             }
-            if (!skip_set_flag) {
-                auto s = opendojo::slot::set_recorded_flag(i, true);
-                if (s != opendojo::slot::WriteStatus::Ok) {
-                    char buf[128];
-                    std::snprintf(buf, sizeof(buf), "slot %zu: %s",
-                                  i + 1, opendojo::slot::describe(s));
-                    r.message = buf;
-                    return r;
-                }
+            opendojo::memory::write_bytes(addr, d.recordings[i].slot_bytes.data(),
+                                          opendojo::slot::SLOT_PITCH);
+            auto s = opendojo::slot::set_recorded_flag(i, true);
+            if (s != opendojo::slot::WriteStatus::Ok) {
+                char buf[128];
+                std::snprintf(buf, sizeof(buf), "slot %zu: %s", i + 1, opendojo::slot::describe(s));
+                r.message = buf;
+                return r;
             }
         }
         char buf[128];
-        std::snprintf(buf, sizeof(buf), "replaced all slots with %zu recordings", d.recordings.size());
+        std::snprintf(buf, sizeof(buf), "replaced all slots with %zu recordings",
+                      d.recordings.size());
         r.ok = true;
         r.message = buf;
         OPENDOJO_LOG("load_drill: %s (%ls)", r.message.c_str(), path.c_str());
@@ -251,51 +219,42 @@ LoadResult load_drill(const std::filesystem::path& path, LoadMode mode) {
     if (free_slots.size() < d.recordings.size()) {
         char buf[160];
         std::snprintf(buf, sizeof(buf),
-                      "drill needs %zu slots, %zu free — Shift+Load to replace",
+                      "drill needs %zu recording slots, %zu free - use Replace instead",
                       d.recordings.size(), free_slots.size());
         r.message = buf;
         return r;
     }
     for (std::size_t i = 0; i < d.recordings.size(); ++i) {
-        if (!skip_slot_bytes) {
-            auto addr = opendojo::slot::address(free_slots[i]);
-            if (!addr) {
-                r.message = "pool not allocated";
-                return r;
-            }
-            opendojo::memory::write_bytes(
-                addr, d.recordings[i].slot_bytes.data(), opendojo::slot::SLOT_PITCH);
+        auto addr = opendojo::slot::address(free_slots[i]);
+        if (!addr) {
+            r.message = "pool not allocated";
+            return r;
         }
-        if (!skip_set_flag) {
-            auto s = opendojo::slot::set_recorded_flag(free_slots[i], true);
-            if (s != opendojo::slot::WriteStatus::Ok) {
-                char buf[128];
-                std::snprintf(buf, sizeof(buf), "slot %zu: %s",
-                              free_slots[i] + 1, opendojo::slot::describe(s));
-                r.message = buf;
-                return r;
-            }
+        opendojo::memory::write_bytes(addr, d.recordings[i].slot_bytes.data(),
+                                      opendojo::slot::SLOT_PITCH);
+        auto s = opendojo::slot::set_recorded_flag(free_slots[i], true);
+        if (s != opendojo::slot::WriteStatus::Ok) {
+            char buf[128];
+            std::snprintf(buf, sizeof(buf), "slot %zu: %s", free_slots[i] + 1,
+                          opendojo::slot::describe(s));
+            r.message = buf;
+            return r;
         }
     }
-    // Caller is responsible for calling subsystems::mark_session_loaded —
-    // see the same note in the ReplaceAll branch above.
     char buf[160];
-    std::snprintf(buf, sizeof(buf), "loaded %zu recordings into free slots",
-                  d.recordings.size());
+    std::snprintf(buf, sizeof(buf), "loaded %zu recordings into free slots", d.recordings.size());
     r.ok = true;
     r.message = buf;
     OPENDOJO_LOG("load_drill: %s (%ls)", r.message.c_str(), path.c_str());
     return r;
 }
 
-ExportResult export_current_slots(std::string_view drill_name,
-                                  std::string_view description,
-                                  std::string_view character,
-                                  std::string_view cpu_side) {
+ExportResult export_current_slots(std::string_view drill_name, std::string_view description,
+                                  std::string_view character, std::string_view cpu_side) {
     ExportResult r;
 
     if (!opendojo::subsystems::pool1()) {
-        r.message = "pool1 not allocated — record once in practice mode first";
+        r.message = "not ready - record once in practice mode first";
         return r;
     }
     if (!ensure_drills_dir()) {
@@ -308,7 +267,7 @@ ExportResult export_current_slots(std::string_view drill_name,
     auto cpu = opendojo::players::detect_cpu();
 
     opendojo::drill::Drill d;
-    d.name        = drill_name.empty() ? timestamp_name() : std::string(drill_name);
+    d.name = drill_name.empty() ? timestamp_name() : std::string(drill_name);
     d.description = std::string(description);
     if (!character.empty()) {
         d.character = std::string(character);
@@ -340,7 +299,7 @@ ExportResult export_current_slots(std::string_view drill_name,
     auto slug = opendojo::drill::slugify(d.name);
     auto path = resolve_collision(drills_dir(), slug);
     if (path.empty()) {
-        r.message = "filename collision storm — pick a different name";
+        r.message = "filename collision storm - pick a different name";
         return r;
     }
     if (!write_whole_file(path, text.data(), text.size())) {
@@ -363,17 +322,19 @@ void show_status() {
     OPENDOJO_LOG("  polaris_base = 0x%llX", static_cast<unsigned long long>(base));
 
     auto p1 = opendojo::subsystems::pool1();
-    OPENDOJO_LOG("  pool1        = 0x%llX %s",
-                static_cast<unsigned long long>(p1),
-                p1 ? "" : "(NULL — record once in practice mode)");
+    OPENDOJO_LOG("  pool1        = 0x%llX %s", static_cast<unsigned long long>(p1),
+                 p1 ? "" : "(NULL — record once in practice mode)");
 
     // Log all resolved subsystem addresses — used to find character ID offsets.
-    struct { const char* name; std::uintptr_t key; } subsys[] = {
-        { "gameplay",  opendojo::subsystems::KEY_GAMEPLAY  },
-        { "singleton", opendojo::subsystems::KEY_SINGLETON },
-        { "subB",      opendojo::subsystems::KEY_SUBB      },
-        { "subC",      opendojo::subsystems::KEY_SUBC      },
-        { "subD",      opendojo::subsystems::KEY_SUBD      },
+    struct {
+        const char* name;
+        std::uintptr_t key;
+    } subsys[] = {
+        {"gameplay", opendojo::subsystems::KEY_GAMEPLAY},
+        {"singleton", opendojo::subsystems::KEY_SINGLETON},
+        {"subB", opendojo::subsystems::KEY_SUBB},
+        {"subC", opendojo::subsystems::KEY_SUBC},
+        {"subD", opendojo::subsystems::KEY_SUBD},
     };
     for (auto& s : subsys) {
         auto addr = opendojo::subsystems::lookup(s.key);

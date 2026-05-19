@@ -5,6 +5,9 @@ project(OpenDojo
     LANGUAGES   CXX
     DESCRIPTION "Tekken 8 practice-mode drill export/import — standalone DLL")
 
+# ---------------------------------------------------------------------------
+# Sanity: Tekken 8 is Windows x64 only. Refuse to configure for anything else.
+# ---------------------------------------------------------------------------
 if(NOT WIN32)
     message(FATAL_ERROR "OpenDojo is Windows-only (Tekken 8 runs on Windows).")
 endif()
@@ -16,6 +19,9 @@ if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
         "(Got ${CMAKE_SIZEOF_VOID_P}-byte pointers.)")
 endif()
 
+# ---------------------------------------------------------------------------
+# Build settings
+# ---------------------------------------------------------------------------
 set(CMAKE_CXX_STANDARD          20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS        OFF)
@@ -27,64 +33,25 @@ if(MSVC)
     add_compile_options(/W4 /permissive- /Zc:__cplusplus /utf-8)
 endif()
 
+# ---------------------------------------------------------------------------
+# Dear ImGui (the menu UI). Pinned to a stable tag; fetched on first
+# configure and cached under build/_deps/.
+# ---------------------------------------------------------------------------
 include(FetchContent)
-
-# ---------------------------------------------------------------------------
-# FreeType — RmlUi's font engine needs it. Pinned to a recent stable.
-# Disable everything that depends on system libs (PNG/zlib/harfbuzz/brotli)
-# so a clean checkout builds without external prerequisites.
-# ---------------------------------------------------------------------------
-set(FT_DISABLE_ZLIB     ON  CACHE BOOL "" FORCE)
-set(FT_DISABLE_BZIP2    ON  CACHE BOOL "" FORCE)
-set(FT_DISABLE_PNG      ON  CACHE BOOL "" FORCE)
-set(FT_DISABLE_HARFBUZZ ON  CACHE BOOL "" FORCE)
-set(FT_DISABLE_BROTLI   ON  CACHE BOOL "" FORCE)
 FetchContent_Declare(
-    freetype
-    GIT_REPOSITORY https://github.com/freetype/freetype.git
-    GIT_TAG        VER-2-13-3
+    imgui
+    GIT_REPOSITORY https://github.com/ocornut/imgui.git
+    GIT_TAG        v1.91.5
     GIT_SHALLOW    TRUE)
-FetchContent_MakeAvailable(freetype)
-if(MSVC AND TARGET freetype)
-    target_compile_options(freetype PRIVATE /W0)
-endif()
-# RmlUi looks for an imported `Freetype::Freetype` target (the find_package
-# convention). FreeType's own CMakeLists exports it; if not, alias it.
-if(NOT TARGET Freetype::Freetype)
-    add_library(Freetype::Freetype ALIAS freetype)
-endif()
-# Pre-populate the find_package variables so RmlUi's find_package(Freetype)
-# call below succeeds without searching the host system.
-set(FREETYPE_FOUND        TRUE                                  CACHE BOOL   "" FORCE)
-set(FREETYPE_INCLUDE_DIRS "${freetype_SOURCE_DIR}/include"      CACHE PATH   "" FORCE)
-set(FREETYPE_LIBRARIES    freetype                              CACHE STRING "" FORCE)
+FetchContent_MakeAvailable(imgui)
 
 # ---------------------------------------------------------------------------
-# RmlUi — HTML/CSS-styled UI library. Replaces ImGui as our menu surface.
-# Build only Core; we provide our own DX12 renderer and Win32 backend.
-# ---------------------------------------------------------------------------
-set(RMLUI_BACKEND      "auto"   CACHE STRING "" FORCE)
-set(RMLUI_SAMPLES      OFF      CACHE BOOL   "" FORCE)
-set(RMLUI_LUA_BINDINGS OFF      CACHE BOOL   "" FORCE)
-set(RMLUI_HARFBUZZ_SAMPLE OFF   CACHE BOOL   "" FORCE)
-set(RMLUI_FONT_ENGINE  "freetype" CACHE STRING "" FORCE)
-set(BUILD_SHARED_LIBS  OFF      CACHE BOOL   "" FORCE)
-FetchContent_Declare(
-    rmlui
-    GIT_REPOSITORY https://github.com/mikke89/RmlUi.git
-    GIT_TAG        6.0
-    GIT_SHALLOW    TRUE)
-FetchContent_MakeAvailable(rmlui)
-if(MSVC)
-    foreach(t rmlui_core rmlui_debugger)
-        if(TARGET ${t})
-            target_compile_options(${t} PRIVATE /W0)
-        endif()
-    endforeach()
-endif()
-
-# ---------------------------------------------------------------------------
-# MinHook — inline function detours.
+# MinHook — inline function detours. We use this instead of COM-vtable
+# swapping because Tekken 8 detects vtable modifications on dxgi.dll and
+# crashes after some delay; inline detours patch the function bytes
+# themselves and aren't caught by the same scan. Pinned to master since
+# the project is mostly dormant and the tagged 1.3.3 release predates
+# modern build tooling fixes.
 # ---------------------------------------------------------------------------
 FetchContent_Declare(
     minhook
@@ -96,8 +63,25 @@ if(MSVC AND TARGET minhook)
     target_compile_options(minhook PRIVATE /W0)
 endif()
 
+add_library(imgui_static STATIC
+    "${imgui_SOURCE_DIR}/imgui.cpp"
+    "${imgui_SOURCE_DIR}/imgui_draw.cpp"
+    "${imgui_SOURCE_DIR}/imgui_tables.cpp"
+    "${imgui_SOURCE_DIR}/imgui_widgets.cpp"
+    "${imgui_SOURCE_DIR}/backends/imgui_impl_win32.cpp"
+    "${imgui_SOURCE_DIR}/backends/imgui_impl_dx12.cpp")
+target_include_directories(imgui_static PUBLIC
+    "${imgui_SOURCE_DIR}"
+    "${imgui_SOURCE_DIR}/backends")
+target_compile_features(imgui_static PUBLIC cxx_std_17)
+if(MSVC)
+    # ImGui upstream produces /W4 warnings; silence them to keep our build clean.
+    target_compile_options(imgui_static PRIVATE /W0)
+endif()
+
 # ---------------------------------------------------------------------------
-# Proxy target
+# Proxy target. Which Windows DLL we masquerade as. dinput8 is the standard
+# fighting-game modding entry point.
 # ---------------------------------------------------------------------------
 set(OPENDOJO_PROXY "dinput8" CACHE STRING
     "Which Windows DLL OpenDojo masquerades as. dinput8 is the default.")
@@ -127,34 +111,42 @@ add_library(opendojo SHARED
     src/menu.cpp
     src/players.cpp
     src/render_hook.cpp
-    src/rmlui_backend.cpp
     src/slot.cpp
     src/subsystems.cpp
+    src/theme.cpp
     "${OPENDOJO_PROXY_SRC}")
 
 target_include_directories(opendojo PRIVATE src)
 target_link_libraries(opendojo PRIVATE
-    rmlui_core
+    imgui_static
     minhook
     user32
     d3d12
     dxgi
-    d3dcompiler)
+    d3dcompiler
+    dxguid)
 target_link_options(opendojo PRIVATE "/DEF:${OPENDOJO_PROXY_DEF}")
 
+# Output filename = the proxy DLL name we're impersonating, no "lib" prefix.
 set_target_properties(opendojo PROPERTIES
     OUTPUT_NAME "${OPENDOJO_PROXY}"
     PREFIX      "")
 
 # ---------------------------------------------------------------------------
-# Install
+# Install: convenience target so iteration is one command. Defaults to
+# <build>/install — override with -DCMAKE_INSTALL_PREFIX="<game>\Polaris\..."
+# to copy directly into the game folder.
 # ---------------------------------------------------------------------------
 install(TARGETS opendojo RUNTIME DESTINATION ".")
-install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/assets/ui/"
-        DESTINATION "opendojo/ui")
 
 # ---------------------------------------------------------------------------
-# Post-build deploy
+# Post-build deploy: copy the freshly built DLL into the Tekken game folder
+# so `cmake --build` lands a working drop in one step. Skipped if the path
+# doesn't exist (e.g. on a clean checkout where Tekken isn't installed at
+# this exact path). Override with -DOPENDOJO_DEPLOY_DIR=... at configure time.
+#
+# If Tekken is running, the copy will fail and so will the build — that's
+# the intended signal to "close the game before redeploying."
 # ---------------------------------------------------------------------------
 set(OPENDOJO_DEPLOY_DIR
     "E:/Steam/steamapps/common/TEKKEN 8/Polaris/Binaries/Win64"
@@ -165,9 +157,6 @@ if(OPENDOJO_DEPLOY_DIR AND EXISTS "${OPENDOJO_DEPLOY_DIR}")
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "$<TARGET_FILE:opendojo>"
             "${OPENDOJO_DEPLOY_DIR}/$<TARGET_FILE_NAME:opendojo>"
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
-            "${CMAKE_CURRENT_SOURCE_DIR}/assets/ui"
-            "${OPENDOJO_DEPLOY_DIR}/opendojo/ui"
-        COMMENT "Deploying $<TARGET_FILE_NAME:opendojo> + assets to ${OPENDOJO_DEPLOY_DIR}"
+        COMMENT "Deploying $<TARGET_FILE_NAME:opendojo> to ${OPENDOJO_DEPLOY_DIR}"
         VERBATIM)
 endif()

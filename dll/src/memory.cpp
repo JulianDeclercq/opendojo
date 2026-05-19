@@ -28,15 +28,31 @@ std::uintptr_t opendojo::memory::polaris_base() {
     return reinterpret_cast<std::uintptr_t>(GetModuleHandleW(POLARIS_MODULE));
 }
 
-std::uint64_t opendojo::memory::read_u64(std::uintptr_t addr) { return read_at<std::uint64_t>(addr); }
-std::uint32_t opendojo::memory::read_u32(std::uintptr_t addr) { return read_at<std::uint32_t>(addr); }
-std::uint16_t opendojo::memory::read_u16(std::uintptr_t addr) { return read_at<std::uint16_t>(addr); }
-std::uint8_t  opendojo::memory::read_u8 (std::uintptr_t addr) { return read_at<std::uint8_t >(addr); }
+std::uint64_t opendojo::memory::read_u64(std::uintptr_t addr) {
+    return read_at<std::uint64_t>(addr);
+}
+std::uint32_t opendojo::memory::read_u32(std::uintptr_t addr) {
+    return read_at<std::uint32_t>(addr);
+}
+std::uint16_t opendojo::memory::read_u16(std::uintptr_t addr) {
+    return read_at<std::uint16_t>(addr);
+}
+std::uint8_t opendojo::memory::read_u8(std::uintptr_t addr) {
+    return read_at<std::uint8_t>(addr);
+}
 
-void opendojo::memory::write_u64(std::uintptr_t addr, std::uint64_t v) { write_at(addr, v); }
-void opendojo::memory::write_u32(std::uintptr_t addr, std::uint32_t v) { write_at(addr, v); }
-void opendojo::memory::write_u16(std::uintptr_t addr, std::uint16_t v) { write_at(addr, v); }
-void opendojo::memory::write_u8 (std::uintptr_t addr, std::uint8_t  v) { write_at(addr, v); }
+void opendojo::memory::write_u64(std::uintptr_t addr, std::uint64_t v) {
+    write_at(addr, v);
+}
+void opendojo::memory::write_u32(std::uintptr_t addr, std::uint32_t v) {
+    write_at(addr, v);
+}
+void opendojo::memory::write_u16(std::uintptr_t addr, std::uint16_t v) {
+    write_at(addr, v);
+}
+void opendojo::memory::write_u8(std::uintptr_t addr, std::uint8_t v) {
+    write_at(addr, v);
+}
 
 void opendojo::memory::read_bytes(std::uintptr_t addr, void* out, std::size_t n) {
     if (!addr || !out || !n) return;

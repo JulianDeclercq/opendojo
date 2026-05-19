@@ -1,0 +1,51 @@
+---
+Language:        Cpp
+BasedOnStyle:    Google
+Standard:        Cpp11
+ColumnLimit:     100
+IndentWidth:     4
+TabWidth:        4
+UseTab:          Never
+
+# Pointer style: `int* p` (clang-format would otherwise scan the file).
+DerivePointerAlignment: false
+PointerAlignment:       Left
+
+# Layout
+AccessModifierOffset:                  -4
+NamespaceIndentation:                  None
+BreakBeforeBraces:                     Attach
+BreakConstructorInitializers:          BeforeColon
+ConstructorInitializerIndentWidth:     4
+ContinuationIndentWidth:               4
+SpacesBeforeTrailingComments:          2
+
+# Short statements
+AllowShortFunctionsOnASingleLine:      Inline
+AllowShortIfStatementsOnASingleLine:   WithoutElse
+AllowShortCaseLabelsOnASingleLine:     true
+AllowShortLoopsOnASingleLine:          false
+AllowShortBlocksOnASingleLine:         Empty
+
+# Includes: preserve our hand-grouped order (system, project).
+SortIncludes:    false
+IncludeBlocks:   Preserve
+
+# Don't reflow comments or string literals.
+ReflowComments:  false
+
+# Don't aggressively align trailing assignments; the codebase only does
+# this for opt-in tabular blocks (proxy_dinput8.cpp) which we leave alone
+# via clang-format off pragmas if needed.
+AlignConsecutiveAssignments:  false
+AlignConsecutiveDeclarations: false
+AlignAfterOpenBracket:        Align
+
+# Braces: no space between identifier and {} (`std::tm tm{};`)
+SpaceBeforeCpp11BracedList:   false
+Cpp11BracedListStyle:         true
+
+# Penalties tuned to discourage breaking mid-call chains.
+PenaltyBreakAssignment:                  20
+PenaltyBreakBeforeFirstCallParameter:    50
+PenaltyReturnTypeOnItsOwnLine:           200

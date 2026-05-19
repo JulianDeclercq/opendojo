@@ -22,43 +22,43 @@ namespace opendojo::autosave {
 namespace {
 
 struct State {
-    bool          initialized         = false;
-    bool          enabled             = false;
-    bool          prev_detected       = false;
+    bool initialized = false;
+    bool enabled = false;
+    bool prev_detected = false;
     // character_id is the canonical change-detection key: cheap uint32
     // compare, no allocation per frame. The matching name string is only
     // refreshed when the id actually changes — most frames touch neither.
-    std::uint32_t prev_character_id   = 0;
-    std::string   prev_character_name;
+    std::uint32_t prev_character_id = 0;
+    std::string prev_character_name;
 
     // When non-empty, an autoload is pending for this character. Cleared
     // when load_drill returns ok, when no autosave file exists, or when
     // we've given up after too many real load_drill failures.
-    std::string   pending_load;
+    std::string pending_load;
     // `failures` counts only attempts where load_drill itself returned
     // !ok — drives the give-up threshold. pool1-not-allocated and
     // file-missing don't count; those retry indefinitely.
-    int           failures            = 0;
-    int           frames_until_retry  = 0;
+    int failures = 0;
+    int frames_until_retry = 0;
     // Frames spent waiting for the round-active gate (player1.frames_since_round_start >= 1).
     // Until this fires, writing recording-flag state during the round
     // intro freezes character input — the singleton +0x002 = 0x40 etc.
     // writes in set_recorded_flag look like "playback armed, awaiting
     // trigger" to the game, and the user can't move until they manually
     // re-evaluate state (open the pause menu, or Select+A reset).
-    int           round_wait_frames   = 0;
+    int round_wait_frames = 0;
 
     // Practice-mode gate. We tick only while we're inside a practice scene.
     // A small grace window keeps us live for a few frames after the
     // subsystem clears so the exit-from-practice save still fires.
-    int           frames_outside_practice = 9999;  // start firmly outside
+    int frames_outside_practice = 9999;  // start firmly outside
 };
 State g_s;
 
-constexpr int MAX_FAILURES             = 3;     // give up after this many load_drill !ok
-constexpr int RETRY_INTERVAL           = 60;    // poll once per second between retries
-constexpr int EXIT_GRACE_FRAMES        = 5;     // keep ticking briefly after leaving practice
-constexpr int MAX_ROUND_WAIT_FRAMES    = 1800;  // 30s safety timeout if round-active never fires
+constexpr int MAX_FAILURES = 3;              // give up after this many load_drill !ok
+constexpr int RETRY_INTERVAL = 60;           // poll once per second between retries
+constexpr int EXIT_GRACE_FRAMES = 5;         // keep ticking briefly after leaving practice
+constexpr int MAX_ROUND_WAIT_FRAMES = 1800;  // 30s safety timeout if round-active never fires
 
 std::filesystem::path autosave_path(std::string_view character) {
     // Character names are pure ASCII (lowercase a-z + digits + underscore)
@@ -127,10 +127,11 @@ bool save_for(std::string_view character) {
     }
 
     drill::Drill d;
-    d.name        = "[autosave] " + std::string(character) + "  " + timebuf;
-    d.description = "Auto-saved scratch drill. Overwritten the next time the CPU "
-                    "character changes or you leave practice with this character.";
-    d.character   = std::string(character);
+    d.name = "[autosave] " + std::string(character) + "  " + timebuf;
+    d.description =
+        "Auto-saved scratch drill. Overwritten the next time the CPU "
+        "character changes or you leave practice with this character.";
+    d.character = std::string(character);
 
     for (std::size_t i = 0; i < slot::USER_SLOTS; ++i) {
         if (!slot::is_populated(i)) continue;
@@ -161,17 +162,15 @@ bool save_for(std::string_view character) {
         OPENDOJO_LOG("autosave: write failed: %ls", path.c_str());
         return false;
     }
-    OPENDOJO_LOG("autosave: saved %zu recordings for %s -> %ls",
-                 d.recordings.size(),
-                 std::string(character).c_str(),
-                 path.c_str());
+    OPENDOJO_LOG("autosave: saved %zu recordings for %s -> %ls", d.recordings.size(),
+                 std::string(character).c_str(), path.c_str());
     return true;
 }
 
 enum class LoadResult {
-    Ok,         // either loaded successfully or no autosave file exists
-    NotReady,   // pool1 not allocated yet — retry, don't count as failure
-    Failed,     // load_drill returned !ok — counts toward give-up threshold
+    Ok,        // either loaded successfully or no autosave file exists
+    NotReady,  // pool1 not allocated yet — retry, don't count as failure
+    Failed,    // load_drill returned !ok — counts toward give-up threshold
 };
 
 LoadResult try_load_once(std::string_view character) {
@@ -186,8 +185,8 @@ LoadResult try_load_once(std::string_view character) {
 
     auto r = commands::load_drill(path, commands::LoadMode::ReplaceAll);
     if (r.ok) {
-        OPENDOJO_LOG("autosave: loaded for %s — %s",
-                     std::string(character).c_str(), r.message.c_str());
+        OPENDOJO_LOG("autosave: loaded for %s — %s", std::string(character).c_str(),
+                     r.message.c_str());
         return LoadResult::Ok;
     }
     return LoadResult::Failed;
@@ -195,9 +194,9 @@ LoadResult try_load_once(std::string_view character) {
 
 void clear_pending() {
     g_s.pending_load.clear();
-    g_s.failures            = 0;
-    g_s.frames_until_retry  = 0;
-    g_s.round_wait_frames   = 0;
+    g_s.failures = 0;
+    g_s.frames_until_retry = 0;
+    g_s.round_wait_frames = 0;
 }
 
 // Debug bisect markers. Create the named file inside opendojo/ to
@@ -229,8 +228,8 @@ void set_enabled(bool on) {
     // prev_* so we don't immediately fire a transition save/load on the
     // very next tick.
     auto cpu = players::detect_cpu();
-    g_s.prev_detected       = cpu.detected;
-    g_s.prev_character_id   = cpu.character_id;
+    g_s.prev_detected = cpu.detected;
+    g_s.prev_character_id = cpu.character_id;
     g_s.prev_character_name = cpu.character_name;
     clear_pending();
 }
@@ -253,13 +252,11 @@ void tick() {
     // Change detection: cheap uint32 compare. The matching name is only
     // refreshed below when this flag is true, so the no-change steady
     // state allocates nothing.
-    const bool changed = cpu.detected != g_s.prev_detected
-                      || (cpu.detected && cpu.character_id != g_s.prev_character_id);
+    const bool changed = cpu.detected != g_s.prev_detected ||
+                         (cpu.detected && cpu.character_id != g_s.prev_character_id);
 
     // Save the OLD state when we leave practice or switch character.
-    if (changed && g_s.prev_detected) {
-        save_for(g_s.prev_character_name);
-    }
+    if (changed && g_s.prev_detected) { save_for(g_s.prev_character_name); }
 
     // Queue a load when we enter practice or switch to a new character.
     // We hold ALL writes (pool init, slot writes, session-loaded flag
@@ -269,10 +266,10 @@ void tick() {
     // and locks character input until the user manually re-evaluates
     // state (pause menu open, Select+A round reset).
     if (changed && cpu.detected) {
-        g_s.pending_load        = cpu.character_name;
-        g_s.failures            = 0;
-        g_s.frames_until_retry  = 0;
-        g_s.round_wait_frames   = 0;
+        g_s.pending_load = cpu.character_name;
+        g_s.failures = 0;
+        g_s.frames_until_retry = 0;
+        g_s.round_wait_frames = 0;
     }
 
     // Pending load processing — gated on round-active for the reason above.
@@ -280,9 +277,10 @@ void tick() {
         if (!players::round_active()) {
             ++g_s.round_wait_frames;
             if (g_s.round_wait_frames > MAX_ROUND_WAIT_FRAMES) {
-                OPENDOJO_LOG("autosave: round-active gate didn't fire in %d frames; "
-                             "aborting autoload for %s",
-                             MAX_ROUND_WAIT_FRAMES, g_s.pending_load.c_str());
+                OPENDOJO_LOG(
+                    "autosave: round-active gate didn't fire in %d frames; "
+                    "aborting autoload for %s",
+                    MAX_ROUND_WAIT_FRAMES, g_s.pending_load.c_str());
                 clear_pending();
             }
             // else: keep waiting
@@ -292,38 +290,36 @@ void tick() {
             // Bisect: check which stages are currently disabled via debug
             // marker files in opendojo/. Log per-tick so the user
             // sees exactly what ran on each attempt.
-            const bool skip_pool     = dbg_skip("_dbg_skip_pool");
-            const bool skip_load     = dbg_skip("_dbg_skip_load");
+            const bool skip_pool = dbg_skip("_dbg_skip_pool");
+            const bool skip_load = dbg_skip("_dbg_skip_load");
             const bool skip_finalize = dbg_skip("_dbg_skip_finalize");
             OPENDOJO_LOG("autosave: bisect stages — pool=%s load=%s finalize=%s",
-                         skip_pool ? "SKIP" : "run",
-                         skip_load ? "SKIP" : "run",
+                         skip_pool ? "SKIP" : "run", skip_load ? "SKIP" : "run",
                          skip_finalize ? "SKIP" : "run");
 
-            if (!skip_pool) {
-                subsystems::ensure_pool_allocated();
-            }
+            if (!skip_pool) { subsystems::ensure_pool_allocated(); }
 
             LoadResult rs = LoadResult::Ok;  // pretend success if load is skipped
-            if (!skip_load) {
-                rs = try_load_once(g_s.pending_load);
-            }
+            if (!skip_load) { rs = try_load_once(g_s.pending_load); }
 
             if (rs == LoadResult::Ok) {
                 if (!skip_finalize) {
                     if (!subsystems::mark_session_loaded(true)) {
-                        OPENDOJO_LOG("autosave: mark_session_loaded returned false "
-                                     "(see prior log for which chain link)");
+                        OPENDOJO_LOG(
+                            "autosave: mark_session_loaded returned false "
+                            "(see prior log for which chain link)");
                     }
                 }
-                OPENDOJO_LOG("autosave: autoload complete for %s "
-                             "(round-wait was %d frames)",
-                             g_s.pending_load.c_str(), g_s.round_wait_frames);
+                OPENDOJO_LOG(
+                    "autosave: autoload complete for %s "
+                    "(round-wait was %d frames)",
+                    g_s.pending_load.c_str(), g_s.round_wait_frames);
                 clear_pending();
             } else if (rs == LoadResult::Failed && ++g_s.failures >= MAX_FAILURES) {
-                OPENDOJO_LOG("autosave: giving up on autoload for %s "
-                             "after %d failed load_drill attempts",
-                             g_s.pending_load.c_str(), g_s.failures);
+                OPENDOJO_LOG(
+                    "autosave: giving up on autoload for %s "
+                    "after %d failed load_drill attempts",
+                    g_s.pending_load.c_str(), g_s.failures);
                 clear_pending();
             } else {
                 g_s.frames_until_retry = RETRY_INTERVAL;
@@ -333,11 +329,9 @@ void tick() {
 
     // Only refresh prev_character_name on actual change — saves the per-
     // frame string assignment when the character hasn't moved.
-    if (changed) {
-        g_s.prev_character_name = cpu.character_name;
-    }
+    if (changed) { g_s.prev_character_name = cpu.character_name; }
     g_s.prev_character_id = cpu.character_id;
-    g_s.prev_detected     = cpu.detected;
+    g_s.prev_detected = cpu.detected;
 }
 
 }  // namespace opendojo::autosave

@@ -7,9 +7,10 @@ namespace opendojo::slot {
 
 const char* describe(WriteStatus s) {
     switch (s) {
-        case WriteStatus::Ok:                return "ok";
-        case WriteStatus::InvalidSlot:       return "invalid slot index";
-        case WriteStatus::PoolNotAllocated:  return "pool1 not allocated — record once in practice mode first";
+        case WriteStatus::Ok: return "ok";
+        case WriteStatus::InvalidSlot: return "invalid slot index";
+        case WriteStatus::PoolNotAllocated:
+            return "pool1 not allocated — record once in practice mode first";
         case WriteStatus::NotInPracticeMode: return "not in practice mode (subsystem unresolved)";
     }
     return "unknown";
@@ -31,10 +32,8 @@ bool is_populated(std::size_t slot_idx) {
     if (slot_idx >= USER_SLOTS) return false;
     auto gameplay = subsystems::lookup(subsystems::KEY_GAMEPLAY);
     if (!gameplay) return false;
-    auto flag = memory::read_u32(gameplay
-                                 + GAMEPLAY_SLOT_BASE
-                                 + slot_idx * GAMEPLAY_SLOT_STRIDE
-                                 + GAMEPLAY_SLOT_FLAG);
+    auto flag = memory::read_u32(gameplay + GAMEPLAY_SLOT_BASE + slot_idx * GAMEPLAY_SLOT_STRIDE +
+                                 GAMEPLAY_SLOT_FLAG);
     return flag == 2u;
 }
 
@@ -52,40 +51,39 @@ WriteStatus set_recorded_flag(std::size_t slot_idx, bool recorded) {
     // Re-resolve every time — subsystem pointers change at scene transitions
     // (see project_opendojo_subsystem_lifecycle memory). Caching breaks
     // silently after the first scene change.
-    auto gameplay  = subsystems::lookup(subsystems::KEY_GAMEPLAY);
+    auto gameplay = subsystems::lookup(subsystems::KEY_GAMEPLAY);
     auto singleton = subsystems::lookup(subsystems::KEY_SINGLETON);
-    auto subB      = subsystems::lookup(subsystems::KEY_SUBB);
-    auto subC      = subsystems::lookup(subsystems::KEY_SUBC);
-    if (!gameplay || !singleton || !subB || !subC) {
-        return WriteStatus::NotInPracticeMode;
-    }
+    auto subB = subsystems::lookup(subsystems::KEY_SUBB);
+    auto subC = subsystems::lookup(subsystems::KEY_SUBC);
+    if (!gameplay || !singleton || !subB || !subC) { return WriteStatus::NotInPracticeMode; }
 
-    auto flag_addr = gameplay
-                   + GAMEPLAY_SLOT_BASE
-                   + slot_idx * GAMEPLAY_SLOT_STRIDE
-                   + GAMEPLAY_SLOT_FLAG;
+    auto flag_addr = gameplay + GAMEPLAY_SLOT_BASE + slot_idx * GAMEPLAY_SLOT_STRIDE +
+                     GAMEPLAY_SLOT_FLAG;
 
     if (recorded) {
-        memory::write_u32(flag_addr,         2u);     // per-slot "has recording" sentinel
-        memory::write_u8 (singleton + 0x002, 0x40u);  // playback side-gate (P1=0x40); without it P2-side drills mirror
-        memory::write_u8 (singleton + 0x008, 0x01u);  // recording-state flag — best guess "session present"
+        memory::write_u32(flag_addr, 2u);  // per-slot "has recording" sentinel
+        memory::write_u8(singleton + 0x002,
+                         0x40u);  // playback side-gate (P1=0x40); without it P2-side drills mirror
+        memory::write_u8(singleton + 0x008,
+                         0x01u);  // recording-state flag — best guess "session present"
         // subB[0x065] = 0 is omitted on purpose: writing 0 mid-intro
         // locks character input. Best guess: "playback session armed";
         // bisected as the sole single write that triggers the freeze.
-        memory::write_u32(subC      + 0x25C, 1u);     // global "≥1 slot is recorded" counter
+        memory::write_u32(subC + 0x25C, 1u);  // global "≥1 slot is recorded" counter
     } else {
-        memory::write_u32(flag_addr,         0u);          // clear per-slot sentinel
-        memory::write_u8 (singleton + 0x002, 0x00u);       // clear side-gate
-        memory::write_u8 (singleton + 0x008, 0x00u);       // clear session-present
-        memory::write_u8 (subB      + 0x065, 0x01u);       // baseline "no playback" — safe during intro
-        memory::write_u32(subC      + 0x25C, 0xFFFFFFFFu); // -1 == "no recordings" (game's baseline-pass value)
+        memory::write_u32(flag_addr, 0u);            // clear per-slot sentinel
+        memory::write_u8(singleton + 0x002, 0x00u);  // clear side-gate
+        memory::write_u8(singleton + 0x008, 0x00u);  // clear session-present
+        memory::write_u8(subB + 0x065, 0x01u);       // baseline "no playback" — safe during intro
+        memory::write_u32(subC + 0x25C,
+                          0xFFFFFFFFu);  // -1 == "no recordings" (game's baseline-pass value)
     }
     return WriteStatus::Ok;
 }
 
 WriteStatus write(std::size_t slot_idx, const std::uint8_t* data) {
     if (slot_idx >= USER_SLOTS) return WriteStatus::InvalidSlot;
-    if (!data)                  return WriteStatus::InvalidSlot;
+    if (!data) return WriteStatus::InvalidSlot;
 
     auto p1 = subsystems::pool1();
     if (!p1) return WriteStatus::PoolNotAllocated;

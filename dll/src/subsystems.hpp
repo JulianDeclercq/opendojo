@@ -17,20 +17,26 @@
 namespace opendojo::subsystems {
 
 // Pointer-storage offsets within Polaris's image.
-inline constexpr std::uintptr_t CTX_PTR_OFFSET   = 0x9537300;
+inline constexpr std::uintptr_t CTX_PTR_OFFSET = 0x9537300;
 inline constexpr std::uintptr_t POOL1_PTR_OFFSET = 0x986AC70;
 inline constexpr std::uintptr_t POOL2_PTR_OFFSET = 0x986AC78;
 
 // Subsystem key offsets — each names a 4-byte hash key for the locator.
 // Comments are best-guess based on bisects + Ghidra; precise semantics
 // unconfirmed for most fields.
-inline constexpr std::uintptr_t KEY_GAMEPLAY    = 0x9537314;  // practice gameplay state: per-slot recorded flags at +0x480, human-side index at +0x47C
-inline constexpr std::uintptr_t KEY_SINGLETON   = 0x95371B0;  // top-level recording session config: side-gate +0x002, "session exists" bit 22 of word0
-inline constexpr std::uintptr_t KEY_RECORDING   = 0x95371A4;  // recording subsystem; `this` arg pool_init expects
-inline constexpr std::uintptr_t KEY_PLAYERS_SUB = 0x9537078;  // per-side Player* array natural finalize uses; not always resolved in our context
-inline constexpr std::uintptr_t KEY_SUBB        = 0x953707C;  // playback-session-armed flag at +0x065; writing 0 mid-intro freezes input
-inline constexpr std::uintptr_t KEY_SUBC        = 0x9537080;  // global recording-state counter at +0x25C: -1 == none, 1 == ≥1 slot recorded; game writes -1 at end of round-start setup pass
-inline constexpr std::uintptr_t KEY_SUBD        = 0x9537084;  // purpose unknown
+inline constexpr std::uintptr_t KEY_GAMEPLAY =
+    0x9537314;  // practice gameplay state: per-slot recorded flags at +0x480, human-side index at +0x47C
+inline constexpr std::uintptr_t KEY_SINGLETON =
+    0x95371B0;  // top-level recording session config: side-gate +0x002, "session exists" bit 22 of word0
+inline constexpr std::uintptr_t KEY_RECORDING =
+    0x95371A4;  // recording subsystem; `this` arg pool_init expects
+inline constexpr std::uintptr_t KEY_PLAYERS_SUB =
+    0x9537078;  // per-side Player* array natural finalize uses; not always resolved in our context
+inline constexpr std::uintptr_t KEY_SUBB =
+    0x953707C;  // playback-session-armed flag at +0x065; writing 0 mid-intro freezes input
+inline constexpr std::uintptr_t KEY_SUBC =
+    0x9537080;  // global recording-state counter at +0x25C: -1 == none, 1 == ≥1 slot recorded; game writes -1 at end of round-start setup pass
+inline constexpr std::uintptr_t KEY_SUBD = 0x9537084;  // purpose unknown
 
 // Walk the service-locator hash map and return the bound pointer for
 // the subsystem whose key lives at module+key_offset. Returns 0 if the

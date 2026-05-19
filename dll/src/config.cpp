@@ -8,7 +8,7 @@
 #include <fstream>
 #include <string>
 
-#include "commands.hpp"   // drills_dir() returns the opendojo/ data dir
+#include "commands.hpp"  // drills_dir() returns the opendojo/ data dir
 #include "log.hpp"
 
 namespace opendojo::config {
@@ -16,7 +16,7 @@ namespace opendojo::config {
 namespace {
 
 std::atomic<std::uint32_t> g_toggle_vk{VK_F12};
-std::atomic<bool>          g_capturing{false};
+std::atomic<bool> g_capturing{false};
 std::atomic<std::uint32_t> g_captured_vk{0};
 
 std::filesystem::path config_path() {
@@ -30,15 +30,15 @@ std::filesystem::path config_path() {
 //
 // Whitespace-permissive, single-line.
 
-bool parse_uint32_after(const std::string& src, const char* key,
-                        std::uint32_t& out) {
+bool parse_uint32_after(const std::string& src, const char* key, std::uint32_t& out) {
     auto pos = src.find(key);
     if (pos == std::string::npos) return false;
     pos = src.find(':', pos);
     if (pos == std::string::npos) return false;
     ++pos;
     // Skip whitespace.
-    while (pos < src.size() && (src[pos] == ' ' || src[pos] == '\t')) ++pos;
+    while (pos < src.size() && (src[pos] == ' ' || src[pos] == '\t'))
+        ++pos;
     if (pos >= src.size()) return false;
     char* end = nullptr;
     auto v = std::strtoul(src.c_str() + pos, &end, 10);
@@ -47,18 +47,16 @@ bool parse_uint32_after(const std::string& src, const char* key,
     return true;
 }
 
-}  // anonymous
+}  // namespace
 
 void load() {
     auto path = config_path();
     std::ifstream f(path, std::ios::binary);
     if (!f) {
-        OPENDOJO_LOG("config: no config file at %ls — using defaults",
-                     path.c_str());
+        OPENDOJO_LOG("config: no config file at %ls — using defaults", path.c_str());
         return;
     }
-    std::string buf((std::istreambuf_iterator<char>(f)),
-                    std::istreambuf_iterator<char>());
+    std::string buf((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
     std::uint32_t v = 0;
     if (parse_uint32_after(buf, "\"toggle_vk\"", v) && v != 0) {
         g_toggle_vk.store(v);
@@ -78,11 +76,12 @@ void save() {
         return;
     }
     f << "{ \"toggle_vk\": " << g_toggle_vk.load() << " }\n";
-    OPENDOJO_LOG("config: saved toggle_vk = 0x%02X to %ls",
-                 g_toggle_vk.load(), path.c_str());
+    OPENDOJO_LOG("config: saved toggle_vk = 0x%02X to %ls", g_toggle_vk.load(), path.c_str());
 }
 
-std::uint32_t toggle_vk() { return g_toggle_vk.load(); }
+std::uint32_t toggle_vk() {
+    return g_toggle_vk.load();
+}
 
 void set_toggle_vk(std::uint32_t vk) {
     if (vk == 0) return;
@@ -100,7 +99,9 @@ void cancel_capture() {
     g_captured_vk.store(0);
 }
 
-bool is_capturing() { return g_capturing.load(); }
+bool is_capturing() {
+    return g_capturing.load();
+}
 
 std::uint32_t consume_captured_vk() {
     auto v = g_captured_vk.exchange(0);

@@ -7,13 +7,13 @@
 #include <ctime>
 #include <filesystem>
 #include <mutex>
-#include <share.h>      // _SH_DENYNO so the log can be tailed live in another process
+#include <share.h>  // _SH_DENYNO so the log can be tailed live in another process
 #include <string>
 
 namespace {
 
 std::mutex g_mutex;
-FILE*      g_file = nullptr;
+FILE* g_file = nullptr;
 
 // Drop the log next to the exe. For Tekken that's
 // <TEKKEN 8>\Polaris\Binaries\Win64\opendojo.log.

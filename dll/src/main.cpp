@@ -15,8 +15,6 @@
 
 #include <windows.h>
 
-#include <filesystem>
-#include <string>
 #include <thread>
 
 #include "config.hpp"
@@ -33,37 +31,25 @@ void init_thread() {
 
     auto base = opendojo::memory::polaris_base();
     if (!base) {
-        OPENDOJO_LOG("WARNING: Polaris-Win64-Shipping.exe not loaded — "
-                    "DLL was injected into the wrong process");
+        OPENDOJO_LOG(
+            "WARNING: Polaris-Win64-Shipping.exe not loaded — "
+            "DLL was injected into the wrong process");
         return;
     }
     OPENDOJO_LOG("polaris_base = 0x%llX", static_cast<unsigned long long>(base));
 
     // pool1 is lazy — null until the user records once per game launch.
     auto p1 = opendojo::subsystems::pool1();
-    OPENDOJO_LOG("pool1 = 0x%llX (%s)",
-                static_cast<unsigned long long>(p1),
-                p1 ? "ready" : "not allocated yet — record once in practice mode");
+    OPENDOJO_LOG("pool1 = 0x%llX (%s)", static_cast<unsigned long long>(p1),
+                 p1 ? "ready" : "not allocated yet — record once in practice mode");
 
     // Load persistent settings (hotkey binding etc.). Defaults are
     // applied if no config.json exists yet.
     opendojo::config::load();
 
-    // Renderer hook drives the menu. Skipped if a file named
-    // "opendojo_no_menu" exists next to the DLL — used to diagnose whether
-    // the hook itself is destabilizing the game.
-    wchar_t exe_path[MAX_PATH];
-    GetModuleFileNameW(nullptr, exe_path, MAX_PATH);
-    std::wstring marker = std::filesystem::path(exe_path).parent_path()
-                              .append(L"opendojo_no_menu").wstring();
-    if (GetFileAttributesW(marker.c_str()) != INVALID_FILE_ATTRIBUTES) {
-        OPENDOJO_LOG("opendojo_no_menu marker found at %ls — render hook NOT installed",
-                    marker.c_str());
-    } else {
-        opendojo::render_hook::install();
-    }
+    opendojo::render_hook::install();
 
-    OPENDOJO_LOG("init thread done — press F12 in game to open menu (if enabled)");
+    OPENDOJO_LOG("init thread done — press F12 in game to open menu");
 }
 
 }  // namespace

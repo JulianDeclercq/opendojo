@@ -13,7 +13,7 @@ namespace {
 // allocates pool1+pool2 if null, and memsets them. Idempotent.
 constexpr std::uintptr_t POOL_INIT_RVA = 0x18E8E00;
 
-using PoolInitFn = void(*)(void* this_ptr);
+using PoolInitFn = void (*)(void* this_ptr);
 
 }  // anonymous namespace
 
@@ -26,22 +26,20 @@ std::uintptr_t opendojo::subsystems::lookup(std::uintptr_t key_offset) {
     if (!map) return 0;
 
     auto sentinel = memory::read_u64(map + 0x100);
-    auto mask     = memory::read_u64(map + 0x128);
-    auto buckets  = memory::read_u64(map + 0x110);
+    auto mask = memory::read_u64(map + 0x128);
+    auto buckets = memory::read_u64(map + 0x110);
     if (!buckets) return 0;
 
-    auto key    = memory::read_u32(base + key_offset);
+    auto key = memory::read_u32(base + key_offset);
     auto bucket = buckets + (mask & key) * 0x10;
-    auto first  = memory::read_u64(bucket);
-    auto entry  = memory::read_u64(bucket + 8);
+    auto first = memory::read_u64(bucket);
+    auto entry = memory::read_u64(bucket + 8);
 
     // Walk the bucket's collision chain. Cap at 64 steps as a sanity bound
     // — real chains are short, anything deeper means the data is corrupt
     // or we've snapshotted mid-resize.
     for (int steps = 0; entry && entry != sentinel && steps < 64; ++steps) {
-        if (memory::read_u32(entry + 0x10) == key) {
-            return memory::read_u64(entry + 0x18);
-        }
+        if (memory::read_u32(entry + 0x10) == key) { return memory::read_u64(entry + 0x18); }
         if (entry == first) break;
         entry = memory::read_u64(entry + 8);
     }
@@ -67,13 +65,18 @@ bool opendojo::subsystems::mark_session_loaded(bool loaded) {
     // natural Record→Confirm flow (FUN_141911380).
     auto word0 = memory::read_u32(singleton);
     if (loaded) {
-        memory::write_u32(singleton,        word0 | 0x400000u);  // bit 22: "session exists" — UI gates on this
-        memory::write_u32(singleton + 0x22, 0u);                 // "actively recording" — clear to mark "saved, idle"
-        memory::write_u8 (singleton + 0x99, 0u);                 // mid-record progress flag — clear when done
+        memory::write_u32(singleton,
+                          word0 | 0x400000u);  // bit 22: "session exists" — UI gates on this
+        memory::write_u32(singleton + 0x22,
+                          0u);  // "actively recording" — clear to mark "saved, idle"
+        memory::write_u8(singleton + 0x99, 0u);  // mid-record progress flag — clear when done
         auto recording = lookup(KEY_RECORDING);
-        if (recording) memory::write_u32(recording + 0x28, 0u);  // pre_clear's 2nd write; meaning unknown but natural finalize zeroes it
+        if (recording)
+            memory::write_u32(
+                recording + 0x28,
+                0u);  // pre_clear's 2nd write; meaning unknown but natural finalize zeroes it
     } else {
-        memory::write_u32(singleton, word0 & ~0x400000u);        // clear "session exists" bit
+        memory::write_u32(singleton, word0 & ~0x400000u);  // clear "session exists" bit
     }
 
     // opponent_player[0x39C0]: "this opponent has a recording session
@@ -112,7 +115,6 @@ void opendojo::subsystems::ensure_pool_allocated() {
     auto p1 = memory::read_u64(memory::polaris(POOL1_PTR_OFFSET));
     auto p2 = memory::read_u64(memory::polaris(POOL2_PTR_OFFSET));
     OPENDOJO_LOG("subsystems: force-allocated pool1=0x%llX pool2=0x%llX (recording=0x%llX)",
-                 static_cast<unsigned long long>(p1),
-                 static_cast<unsigned long long>(p2),
+                 static_cast<unsigned long long>(p1), static_cast<unsigned long long>(p2),
                  static_cast<unsigned long long>(recording));
 }

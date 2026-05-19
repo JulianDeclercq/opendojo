@@ -23,10 +23,10 @@ namespace opendojo::players {
 enum class Side : std::uint8_t { p1 = 0, p2 = 1 };
 
 struct CpuInfo {
-    bool          detected     = false;       // false => not in a match / pattern miss
-    std::uint32_t character_id = 0;            // raw u32 from the Player struct
-    std::string   character_name;              // "jin" or "unknown_<id>"
-    Side          cpu_side     = Side::p2;     // which game slot the CPU occupies
+    bool detected = false;           // false => not in a match / pattern miss
+    std::uint32_t character_id = 0;  // raw u32 from the Player struct
+    std::string character_name;      // "jin" or "unknown_<id>"
+    Side cpu_side = Side::p2;        // which game slot the CPU occupies
 };
 
 // One-shot resolution: re-walks the pointer chain on every call (the
@@ -37,7 +37,7 @@ CpuInfo detect_cpu();
 
 // Stringify / parse Side for drill file headers.
 const char* side_to_string(Side s);
-bool        parse_side(std::string_view s, Side& out);
+bool parse_side(std::string_view s, Side& out);
 
 // Character id -> lowercase name (e.g. 6 -> "jin"). Returns nullptr for
 // ids outside the known roster; callers should format "unknown_<id>".

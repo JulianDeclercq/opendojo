@@ -29,14 +29,14 @@ inline std::uintptr_t polaris(std::uintptr_t offset) {
 std::uint64_t read_u64(std::uintptr_t addr);
 std::uint32_t read_u32(std::uintptr_t addr);
 std::uint16_t read_u16(std::uintptr_t addr);
-std::uint8_t  read_u8 (std::uintptr_t addr);
+std::uint8_t read_u8(std::uintptr_t addr);
 
 void write_u64(std::uintptr_t addr, std::uint64_t v);
 void write_u32(std::uintptr_t addr, std::uint32_t v);
 void write_u16(std::uintptr_t addr, std::uint16_t v);
-void write_u8 (std::uintptr_t addr, std::uint8_t  v);
+void write_u8(std::uintptr_t addr, std::uint8_t v);
 
-void read_bytes (std::uintptr_t addr,       void* out, std::size_t n);
+void read_bytes(std::uintptr_t addr, void* out, std::size_t n);
 void write_bytes(std::uintptr_t addr, const void* src, std::size_t n);
 
 }  // namespace opendojo::memory

@@ -10,35 +10,43 @@ namespace opendojo::drill {
 
 namespace {
 
-// ---- Event-level encoding (identical to v1) -------------------------------
+// ---- Event-level encoding --------------------------------------------------
 
 constexpr std::uint8_t DEFAULT_MARK = 0x2;
-constexpr std::uint8_t DEFAULT_AUX  = 0xA0;
+constexpr std::uint8_t DEFAULT_AUX = 0xA0;
 
-struct DirRow { std::uint8_t nibble; const char* text; };
+struct DirRow {
+    std::uint8_t nibble;
+    const char* text;
+};
 constexpr std::array<DirRow, 9> DIR_TABLE = {{
-    { 0,  "n"  },
-    { 1,  "u"  },
-    { 2,  "d"  },
-    { 4,  "f"  },
-    { 5,  "uf" },
-    { 6,  "df" },
-    { 8,  "b"  },
-    { 9,  "ub" },
-    { 10, "db" },
+    {0, "n"},
+    {1, "u"},
+    {2, "d"},
+    {4, "f"},
+    {5, "uf"},
+    {6, "df"},
+    {8, "b"},
+    {9, "ub"},
+    {10, "db"},
 }};
 
 const char* dir_to_text(std::uint8_t nibble) {
-    for (const auto& row : DIR_TABLE) if (row.nibble == nibble) return row.text;
+    for (const auto& row : DIR_TABLE)
+        if (row.nibble == nibble) return row.text;
     return nullptr;
 }
 
 int text_to_dir(std::string_view tok) {
-    for (const auto& row : DIR_TABLE) if (tok == row.text) return row.nibble;
+    for (const auto& row : DIR_TABLE)
+        if (tok == row.text) return row.nibble;
     return -1;
 }
 
-struct ButtonEncode { std::string text; std::uint8_t unknown; };
+struct ButtonEncode {
+    std::string text;
+    std::uint8_t unknown;
+};
 
 ButtonEncode encode_buttons(std::uint8_t byte1) {
     ButtonEncode out;
@@ -65,11 +73,16 @@ int parse_buttons(std::string_view tok) {
         auto end = tok.find('+', pos);
         if (end == std::string_view::npos) end = tok.size();
         auto sub = tok.substr(pos, end - pos);
-        if      (sub == "1") mask |= 0x40;
-        else if (sub == "2") mask |= 0x80;
-        else if (sub == "3") mask |= 0x10;
-        else if (sub == "4") mask |= 0x20;
-        else return -1;
+        if (sub == "1")
+            mask |= 0x40;
+        else if (sub == "2")
+            mask |= 0x80;
+        else if (sub == "3")
+            mask |= 0x10;
+        else if (sub == "4")
+            mask |= 0x20;
+        else
+            return -1;
         pos = (end < tok.size()) ? end + 1 : end;
     }
     return mask;
@@ -79,8 +92,10 @@ int parse_buttons(std::string_view tok) {
 
 std::string_view trim(std::string_view s) {
     auto is_ws = [](char c) { return c == ' ' || c == '\t'; };
-    while (!s.empty() && is_ws(s.front())) s.remove_prefix(1);
-    while (!s.empty() && is_ws(s.back()))  s.remove_suffix(1);
+    while (!s.empty() && is_ws(s.front()))
+        s.remove_prefix(1);
+    while (!s.empty() && is_ws(s.back()))
+        s.remove_suffix(1);
     return s;
 }
 
@@ -94,10 +109,14 @@ long long parse_hex(std::string_view s) {
     long long n = 0;
     for (char c : s) {
         int d;
-        if      (c >= '0' && c <= '9') d = c - '0';
-        else if (c >= 'a' && c <= 'f') d = 10 + (c - 'a');
-        else if (c >= 'A' && c <= 'F') d = 10 + (c - 'A');
-        else return -1;
+        if (c >= '0' && c <= '9')
+            d = c - '0';
+        else if (c >= 'a' && c <= 'f')
+            d = 10 + (c - 'a');
+        else if (c >= 'A' && c <= 'F')
+            d = 10 + (c - 'A');
+        else
+            return -1;
         n = (n << 4) | d;
     }
     return n;
@@ -117,9 +136,11 @@ std::vector<std::string_view> split_ws(std::string_view s) {
     std::vector<std::string_view> out;
     std::size_t i = 0;
     while (i < s.size()) {
-        while (i < s.size() && (s[i] == ' ' || s[i] == '\t')) ++i;
+        while (i < s.size() && (s[i] == ' ' || s[i] == '\t'))
+            ++i;
         std::size_t start = i;
-        while (i < s.size() && !(s[i] == ' ' || s[i] == '\t')) ++i;
+        while (i < s.size() && !(s[i] == ' ' || s[i] == '\t'))
+            ++i;
         if (start < i) out.push_back(s.substr(start, i - start));
     }
     return out;
@@ -138,9 +159,7 @@ bool parse_kv(std::string_view line, std::string_view& key, std::string_view& va
     val = trim(line.substr(colon + 1));
     if (key.empty()) return false;
     for (char c : key) {
-        bool ident = (c == '_') ||
-                     (c >= 'a' && c <= 'z') ||
-                     (c >= 'A' && c <= 'Z') ||
+        bool ident = (c == '_') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
                      (c >= '0' && c <= '9');
         if (!ident) return false;
     }
@@ -149,10 +168,9 @@ bool parse_kv(std::string_view line, std::string_view& key, std::string_view& va
 
 // ---- Event-line encode / decode -------------------------------------------
 
-std::string encode_event_line(std::uint8_t b0, std::uint8_t b1,
-                              std::uint8_t b2, std::uint8_t b3) {
+std::string encode_event_line(std::uint8_t b0, std::uint8_t b1, std::uint8_t b2, std::uint8_t b3) {
     std::uint8_t mark = (b0 >> 4) & 0x0F;
-    std::uint8_t dir  = b0 & 0x0F;
+    std::uint8_t dir = b0 & 0x0F;
 
     const char* dir_text = dir_to_text(dir);
     std::string dir_raw_annot;
@@ -166,13 +184,11 @@ std::string encode_event_line(std::uint8_t b0, std::uint8_t b1,
     auto btn = encode_buttons(b1);
 
     char line[128];
-    std::snprintf(line, sizeof(line), "  %-2s   %-5s  %4u",
-                  dir_text, btn.text.c_str(), static_cast<unsigned>(b3));
+    std::snprintf(line, sizeof(line), "  %-2s   %-5s  %4u", dir_text, btn.text.c_str(),
+                  static_cast<unsigned>(b3));
     std::string result = line;
 
-    const bool need_meta = (mark != DEFAULT_MARK) ||
-                           (btn.unknown != 0)    ||
-                           (b2 != DEFAULT_AUX);
+    const bool need_meta = (mark != DEFAULT_MARK) || (btn.unknown != 0) || (b2 != DEFAULT_AUX);
     if (!dir_raw_annot.empty() || need_meta) {
         result += "   ";
         if (!dir_raw_annot.empty()) {
@@ -181,17 +197,14 @@ std::string encode_event_line(std::uint8_t b0, std::uint8_t b1,
         }
         if (need_meta) {
             char meta[16];
-            std::snprintf(meta, sizeof(meta), "meta=%X%X%02X",
-                          mark, btn.unknown, b2);
+            std::snprintf(meta, sizeof(meta), "meta=%X%X%02X", mark, btn.unknown, b2);
             result += meta;
         }
     }
     return result;
 }
 
-bool decode_event_line(std::string_view line,
-                       std::array<std::uint8_t, 4>& ev,
-                       std::string& err) {
+bool decode_event_line(std::string_view line, std::array<std::uint8_t, 4>& ev, std::string& err) {
     auto toks = split_ws(line);
     if (toks.size() < 3) {
         err = "expected at least 3 tokens (dir buttons frames), got: ";
@@ -200,46 +213,74 @@ bool decode_event_line(std::string_view line,
     }
 
     const int dir = text_to_dir(toks[0]);
-    if (dir < 0) { err = "unknown direction: "; err.append(toks[0].data(), toks[0].size()); return false; }
+    if (dir < 0) {
+        err = "unknown direction: ";
+        err.append(toks[0].data(), toks[0].size());
+        return false;
+    }
 
     const int btn_mask = parse_buttons(toks[1]);
-    if (btn_mask < 0) { err = "bad buttons: "; err.append(toks[1].data(), toks[1].size()); return false; }
+    if (btn_mask < 0) {
+        err = "bad buttons: ";
+        err.append(toks[1].data(), toks[1].size());
+        return false;
+    }
 
     const long long frames = parse_dec(toks[2]);
-    if (frames < 0 || frames > 255) { err = "bad frame count: "; err.append(toks[2].data(), toks[2].size()); return false; }
+    if (frames < 0 || frames > 255) {
+        err = "bad frame count: ";
+        err.append(toks[2].data(), toks[2].size());
+        return false;
+    }
 
-    int mark    = DEFAULT_MARK;
+    int mark = DEFAULT_MARK;
     int btn_raw = 0;
-    int aux     = DEFAULT_AUX;
+    int aux = DEFAULT_AUX;
     int dir_raw = -1;
 
     for (std::size_t i = 3; i < toks.size(); ++i) {
         auto eq = toks[i].find('=');
         if (eq == std::string_view::npos) {
-            err = "expected key=value, got: "; err.append(toks[i].data(), toks[i].size());
+            err = "expected key=value, got: ";
+            err.append(toks[i].data(), toks[i].size());
             return false;
         }
         auto key = toks[i].substr(0, eq);
         auto val = toks[i].substr(eq + 1);
         long long n = parse_hex(val);
-        if (n < 0) { err = "bad hex value in annotation: "; err.append(toks[i].data(), toks[i].size()); return false; }
+        if (n < 0) {
+            err = "bad hex value in annotation: ";
+            err.append(toks[i].data(), toks[i].size());
+            return false;
+        }
 
         if (key == "meta") {
-            if (n > 0xFFFF) { err = "meta out of range: "; err.append(val.data(), val.size()); return false; }
+            if (n > 0xFFFF) {
+                err = "meta out of range: ";
+                err.append(val.data(), val.size());
+                return false;
+            }
             const auto v = static_cast<std::uint16_t>(n);
-            mark    = (v >> 12) & 0xF;
-            btn_raw = (v >>  8) & 0xF;
-            aux     =  v        & 0xFF;
-        } else if (key == "mark")    { mark    = static_cast<int>(n); }
-          else if (key == "btn_raw") { btn_raw = static_cast<int>(n); }
-          else if (key == "aux")     { aux     = static_cast<int>(n); }
-          else if (key == "dir_raw") { dir_raw = static_cast<int>(n); }
-          else { err = "unknown annotation key: "; err.append(key.data(), key.size()); return false; }
+            mark = (v >> 12) & 0xF;
+            btn_raw = (v >> 8) & 0xF;
+            aux = v & 0xFF;
+        } else if (key == "mark") {
+            mark = static_cast<int>(n);
+        } else if (key == "btn_raw") {
+            btn_raw = static_cast<int>(n);
+        } else if (key == "aux") {
+            aux = static_cast<int>(n);
+        } else if (key == "dir_raw") {
+            dir_raw = static_cast<int>(n);
+        } else {
+            err = "unknown annotation key: ";
+            err.append(key.data(), key.size());
+            return false;
+        }
     }
 
-    const std::uint8_t b0_dir = (dir_raw >= 0)
-        ? static_cast<std::uint8_t>(dir_raw & 0xF)
-        : static_cast<std::uint8_t>(dir & 0xF);
+    const std::uint8_t b0_dir = (dir_raw >= 0) ? static_cast<std::uint8_t>(dir_raw & 0xF)
+                                               : static_cast<std::uint8_t>(dir & 0xF);
     ev = {
         static_cast<std::uint8_t>(((mark & 0xF) << 4) | b0_dir),
         static_cast<std::uint8_t>((btn_mask & 0xF0) | (btn_raw & 0x0F)),
@@ -276,8 +317,8 @@ void encode_recording(std::string& out, const Recording& r, std::size_t idx_one_
     for (std::uint16_t i = 0; i < r.event_count; ++i) {
         std::size_t off = 2 + std::size_t{i} * 4;
         if (off + 3 >= SLOT_PITCH || off + 3 >= r.slot_bytes.size()) break;
-        out += encode_event_line(r.slot_bytes[off],     r.slot_bytes[off + 1],
-                                 r.slot_bytes[off + 2], r.slot_bytes[off + 3]);
+        out += encode_event_line(r.slot_bytes[off], r.slot_bytes[off + 1], r.slot_bytes[off + 2],
+                                 r.slot_bytes[off + 3]);
         out += '\n';
     }
 }
@@ -290,7 +331,7 @@ std::vector<std::uint8_t> pack_events(const std::vector<std::array<std::uint8_t,
     out[1] = static_cast<std::uint8_t>((cnt >> 8) & 0xFF);
     for (std::size_t i = 0; i < events.size(); ++i) {
         const std::size_t off = 2 + i * 4;
-        out[off    ] = events[i][0];
+        out[off] = events[i][0];
         out[off + 1] = events[i][1];
         out[off + 2] = events[i][2];
         out[off + 3] = events[i][3];
@@ -308,14 +349,20 @@ std::string slugify(std::string_view name) {
     bool last_us = false;
     for (char c : name) {
         if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) {
-            out += c; last_us = false;
+            out += c;
+            last_us = false;
         } else if (c >= 'A' && c <= 'Z') {
-            out += static_cast<char>(c - 'A' + 'a'); last_us = false;
+            out += static_cast<char>(c - 'A' + 'a');
+            last_us = false;
         } else {
-            if (!last_us && !out.empty()) { out += '_'; last_us = true; }
+            if (!last_us && !out.empty()) {
+                out += '_';
+                last_us = true;
+            }
         }
     }
-    while (!out.empty() && out.back() == '_') out.pop_back();
+    while (!out.empty() && out.back() == '_')
+        out.pop_back();
     if (out.empty()) out = "drill";
     return out;
 }
@@ -333,16 +380,20 @@ std::string encode_text(const Drill& d) {
     out.reserve(1024 + d.recordings.size() * 256);
 
     char buf[256];
-    out += "# OpenDojo drill v2\n";
-    std::snprintf(buf, sizeof(buf), "name:         %s\n", d.name.c_str());                   out += buf;
-    std::snprintf(buf, sizeof(buf), "description:  %s\n", d.description.c_str());            out += buf;
-    std::snprintf(buf, sizeof(buf), "character:    %s\n", d.character.empty() ? "unknown" : d.character.c_str());
+    out += "# OpenDojo drill\n";
+    std::snprintf(buf, sizeof(buf), "name:         %s\n", d.name.c_str());
+    out += buf;
+    std::snprintf(buf, sizeof(buf), "description:  %s\n", d.description.c_str());
+    out += buf;
+    std::snprintf(buf, sizeof(buf), "character:    %s\n",
+                  d.character.empty() ? "unknown" : d.character.c_str());
     out += buf;
     if (!d.cpu_side.empty()) {
         std::snprintf(buf, sizeof(buf), "cpu_side:     %s\n", d.cpu_side.c_str());
         out += buf;
     }
-    std::snprintf(buf, sizeof(buf), "recordings:   %zu\n", d.recordings.size());             out += buf;
+    std::snprintf(buf, sizeof(buf), "recordings:   %zu\n", d.recordings.size());
+    out += buf;
     out +=
         "#\n"
         "# === Editing this drill ===\n"
@@ -369,38 +420,6 @@ std::string encode_text(const Drill& d) {
 TextResult decode_text(std::string_view text) {
     TextResult result;
 
-    // Format magic check on the first non-empty / non-comment line. We expect
-    // exactly the v2 header banner.
-    {
-        std::size_t pos = 0;
-        bool checked = false;
-        while (pos <= text.size() && !checked) {
-            auto eol = text.find_first_of("\r\n", pos);
-            if (eol == std::string_view::npos) eol = text.size();
-            auto line = trim(text.substr(pos, eol - pos));
-            pos = eol;
-            if (pos < text.size() && text[pos] == '\r') ++pos;
-            if (pos < text.size() && text[pos] == '\n') ++pos;
-            if (line.empty()) { if (pos >= text.size()) break; else continue; }
-            if (line.substr(0, 1) == "#") {
-                if (line.find("OpenDojo drill") != std::string_view::npos) {
-                    if (line.find("v2") == std::string_view::npos) {
-                        result.error = "unsupported drill version (expected v2): ";
-                        result.error.append(line.data(), line.size());
-                        return result;
-                    }
-                    checked = true;
-                    break;
-                }
-                continue;
-            }
-            // First substantive line wasn't the magic header — accept anyway
-            // so hand-written drills without the banner still work, but treat
-            // as v2.
-            break;
-        }
-    }
-
     enum class Section { Drill, Recording };
     Section section = Section::Drill;
     Recording current;
@@ -411,7 +430,8 @@ TextResult decode_text(std::string_view text) {
             current.slot_bytes = pack_events(events);
             current.event_count = static_cast<std::uint16_t>(events.size());
             current.total_frames = 0;
-            for (auto& e : events) current.total_frames += e[3];
+            for (auto& e : events)
+                current.total_frames += e[3];
             result.drill.recordings.push_back(std::move(current));
             current = Recording{};
             events.clear();
@@ -449,22 +469,27 @@ TextResult decode_text(std::string_view text) {
                 result.error.append(line.data(), line.size());
                 return result;
             }
-            if      (key == "name")        result.drill.name        = std::string(val);
-            else if (key == "description") result.drill.description = std::string(val);
-            else if (key == "character")   result.drill.character   = std::string(val);
-            else if (key == "cpu_side")    result.drill.cpu_side    = std::string(val);
-            else if (key == "recordings")  { /* informational only — count comes from data */ }
-            else {
+            if (key == "name")
+                result.drill.name = std::string(val);
+            else if (key == "description")
+                result.drill.description = std::string(val);
+            else if (key == "character")
+                result.drill.character = std::string(val);
+            else if (key == "cpu_side")
+                result.drill.cpu_side = std::string(val);
+            else if (key == "recordings") { /* informational only — count comes from data */
+            } else {
                 result.error = "unknown drill header key: ";
                 result.error.append(key.data(), key.size());
                 return result;
             }
         } else {  // Section::Recording
             if (is_header) {
-                if      (key == "name")         current.name = std::string(val);
-                else if (key == "events")       { /* informational */ }
-                else if (key == "total_frames") { /* informational */ }
-                else {
+                if (key == "name")
+                    current.name = std::string(val);
+                else if (key == "events") {         /* informational */
+                } else if (key == "total_frames") { /* informational */
+                } else {
                     result.error = "unknown recording header key: ";
                     result.error.append(key.data(), key.size());
                     return result;
@@ -487,9 +512,7 @@ TextResult decode_text(std::string_view text) {
     for (std::size_t i = 0; i < result.drill.recordings.size(); ++i) {
         if (result.drill.recordings[i].event_count > MAX_EVENTS) {
             char buf[128];
-            std::snprintf(buf, sizeof(buf),
-                          "recording %zu has %u events (max %zu)",
-                          i + 1,
+            std::snprintf(buf, sizeof(buf), "recording %zu has %u events (max %zu)", i + 1,
                           static_cast<unsigned>(result.drill.recordings[i].event_count),
                           MAX_EVENTS);
             result.error = buf;
