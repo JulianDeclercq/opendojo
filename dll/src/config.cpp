@@ -1,6 +1,7 @@
 #include "config.hpp"
 
 #include <windows.h>
+#include <xinput.h>
 
 #include <atomic>
 #include <cstdio>
@@ -18,6 +19,10 @@ namespace {
 std::atomic<std::uint32_t> g_toggle_vk{VK_F12};
 std::atomic<bool> g_capturing{false};
 std::atomic<std::uint32_t> g_captured_vk{0};
+
+std::atomic<std::uint16_t> g_toggle_pad_btn{XINPUT_GAMEPAD_Y};
+std::atomic<bool> g_pad_capturing{false};
+std::atomic<std::uint16_t> g_captured_pad_btn{0};
 
 std::filesystem::path config_path() {
     return opendojo::commands::drills_dir() / L"config.json";
@@ -61,8 +66,10 @@ void load() {
     if (parse_uint32_after(buf, "\"toggle_vk\"", v) && v != 0) {
         g_toggle_vk.store(v);
         OPENDOJO_LOG("config: loaded toggle_vk = 0x%02X", v);
-    } else {
-        OPENDOJO_LOG("config: file present but no toggle_vk — keeping default");
+    }
+    if (parse_uint32_after(buf, "\"toggle_pad_btn\"", v) && v != 0) {
+        g_toggle_pad_btn.store(static_cast<std::uint16_t>(v & 0xFFFF));
+        OPENDOJO_LOG("config: loaded toggle_pad_btn = 0x%04X", v);
     }
 }
 
@@ -75,8 +82,10 @@ void save() {
         OPENDOJO_LOG("config: failed to open %ls for write", path.c_str());
         return;
     }
-    f << "{ \"toggle_vk\": " << g_toggle_vk.load() << " }\n";
-    OPENDOJO_LOG("config: saved toggle_vk = 0x%02X to %ls", g_toggle_vk.load(), path.c_str());
+    f << "{ \"toggle_vk\": " << g_toggle_vk.load()
+      << ", \"toggle_pad_btn\": " << g_toggle_pad_btn.load() << " }\n";
+    OPENDOJO_LOG("config: saved toggle_vk=0x%02X toggle_pad_btn=0x%04X to %ls", g_toggle_vk.load(),
+                 g_toggle_pad_btn.load(), path.c_str());
 }
 
 std::uint32_t toggle_vk() {
@@ -111,6 +120,42 @@ std::uint32_t consume_captured_vk() {
 
 void notify_captured_vk(std::uint32_t vk) {
     if (g_capturing.load()) g_captured_vk.store(vk);
+}
+
+// ---- Pad bind -------------------------------------------------------------
+
+std::uint16_t toggle_pad_btn() {
+    return g_toggle_pad_btn.load();
+}
+
+void set_toggle_pad_btn(std::uint16_t mask) {
+    if (mask == 0) return;
+    g_toggle_pad_btn.store(mask);
+    save();
+}
+
+void start_pad_capture() {
+    g_captured_pad_btn.store(0);
+    g_pad_capturing.store(true);
+}
+
+void cancel_pad_capture() {
+    g_pad_capturing.store(false);
+    g_captured_pad_btn.store(0);
+}
+
+bool is_pad_capturing() {
+    return g_pad_capturing.load();
+}
+
+std::uint16_t consume_captured_pad_btn() {
+    auto v = g_captured_pad_btn.exchange(0);
+    if (v != 0) g_pad_capturing.store(false);
+    return v;
+}
+
+void notify_captured_pad_btn(std::uint16_t mask) {
+    if (g_pad_capturing.load()) g_captured_pad_btn.store(mask);
 }
 
 }  // namespace opendojo::config

@@ -3,10 +3,12 @@
 #include <windows.h>
 #include <d3d12.h>
 #include <dxgi1_4.h>
+#include <xinput.h>
 
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <string>
 #include <thread>
@@ -342,6 +344,10 @@ bool init_imgui_runtime() {
     ImGuiIO& io = ImGui::GetIO();
     io.IniFilename = nullptr;  // Don't pollute the game folder.
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
+    // HasGamepad lets ImGui's nav code know the gamepad events we feed
+    // via AddKeyEvent / AddKeyAnalogEvent are real input.
+    io.BackendFlags |= ImGuiBackendFlags_HasGamepad;
 
     // Compute scale BEFORE loading fonts. ImGui defaults assume 96 DPI /
     // ~1080p; Tekken can run at 1440p / 4K / various scaled HiDPI configs.
@@ -457,6 +463,175 @@ void install_keyboard_hooks() {
     install_one(reinterpret_cast<void*>(GetProcAddress(user32, "GetKeyState")),
                 reinterpret_cast<void*>(&gks_hook), reinterpret_cast<void**>(&g_gks_orig),
                 "GetKeyState");
+}
+
+// =============================================================================
+// XInput gamepad — masking hook + own-polling for menu nav and chord toggle
+// =============================================================================
+//
+// Tekken imports XINPUT1_3 (verified via IAT). Plus we lazily probe a few
+// other xinput*.dll versions in case middleware (Steam Input, etc.) routes
+// through a different one.
+//
+// Game-facing hook (xinput_get_state_hook) returns zeroed Gamepad state
+// while the menu is visible, so D-pad / sticks / face buttons don't bleed
+// into the match. Our own polling calls the trampoline (g_xinput_orig)
+// directly to see real state, which drives:
+//   1. The Back + <bind> chord that opens/closes the menu
+//   2. ImGui nav input (sticks, dpad, face buttons) while menu is visible
+//   3. Pad-bind capture for the Settings tab
+
+using XInputGetState_t = DWORD(WINAPI*)(DWORD, XINPUT_STATE*);
+
+XInputGetState_t g_xinput_orig = nullptr;     // trampoline for non-Ex
+XInputGetState_t g_xinput_ex_orig = nullptr;  // trampoline for ordinal-100 Ex
+
+DWORD WINAPI xinput_get_state_hook(DWORD user_index, XINPUT_STATE* state) {
+    DWORD r = g_xinput_orig(user_index, state);
+    if (g_menu_visible.load() && r == ERROR_SUCCESS && state) {
+        std::memset(&state->Gamepad, 0, sizeof(state->Gamepad));
+    }
+    return r;
+}
+DWORD WINAPI xinput_get_state_ex_hook(DWORD user_index, XINPUT_STATE* state) {
+    DWORD r = g_xinput_ex_orig(user_index, state);
+    if (g_menu_visible.load() && r == ERROR_SUCCESS && state) {
+        std::memset(&state->Gamepad, 0, sizeof(state->Gamepad));
+    }
+    return r;
+}
+
+void install_xinput_hooks() {
+    static bool installed = false;
+    if (installed) return;
+    installed = true;
+
+    // Try every xinput*.dll the OS might have loaded. xinput1_3 is what
+    // Tekken imports directly; the others cover Steam Input / overlays.
+    const wchar_t* candidates[] = {
+        L"xinput1_4.dll", L"xinput1_3.dll", L"xinput1_2.dll", L"xinput1_1.dll", L"xinput9_1_0.dll",
+    };
+    int hooked = 0;
+    for (const wchar_t* name : candidates) {
+        HMODULE mod = GetModuleHandleW(name);
+        if (!mod) mod = LoadLibraryW(name);
+        if (!mod) continue;
+
+        auto fn = reinterpret_cast<XInputGetState_t>(GetProcAddress(mod, "XInputGetState"));
+        auto fn_ex = reinterpret_cast<XInputGetState_t>(GetProcAddress(mod, MAKEINTRESOURCEA(100)));
+
+        if (fn) {
+            XInputGetState_t orig = nullptr;
+            if (MH_CreateHook(reinterpret_cast<LPVOID>(fn),
+                              reinterpret_cast<LPVOID>(&xinput_get_state_hook),
+                              reinterpret_cast<LPVOID*>(&orig)) == MH_OK &&
+                MH_EnableHook(reinterpret_cast<LPVOID>(fn)) == MH_OK) {
+                if (!g_xinput_orig) g_xinput_orig = orig;
+                ++hooked;
+            }
+        }
+        if (fn_ex) {
+            XInputGetState_t orig = nullptr;
+            if (MH_CreateHook(reinterpret_cast<LPVOID>(fn_ex),
+                              reinterpret_cast<LPVOID>(&xinput_get_state_ex_hook),
+                              reinterpret_cast<LPVOID*>(&orig)) == MH_OK &&
+                MH_EnableHook(reinterpret_cast<LPVOID>(fn_ex)) == MH_OK) {
+                if (!g_xinput_ex_orig) g_xinput_ex_orig = orig;
+            }
+        }
+    }
+    if (hooked == 0) {
+        OPENDOJO_LOG("render_hook: no xinput*.dll hooked — gamepad nav/chord disabled");
+    }
+}
+
+// Combined per-frame gamepad poll. Cheap when no controller is connected.
+// Reads real state via the trampoline so it sees through our masking hook.
+void poll_gamepad() {
+    if (!g_xinput_orig) return;
+
+    XINPUT_STATE state{};
+    if (g_xinput_orig(0, &state) != ERROR_SUCCESS) return;
+
+    const WORD buttons = state.Gamepad.wButtons;
+    static WORD last_buttons = 0;
+    const WORD pressed = buttons & ~last_buttons;
+    const WORD released = ~buttons & last_buttons;
+    last_buttons = buttons;
+
+    const bool back_held = (buttons & XINPUT_GAMEPAD_BACK) != 0;
+
+    // --- Pad-bind capture: first rising-edge non-Back button wins ---
+    if (opendojo::config::is_pad_capturing()) {
+        if (pressed & XINPUT_GAMEPAD_BACK) {
+            opendojo::config::cancel_pad_capture();
+        } else if (pressed != 0) {
+            // Pick lowest set bit so multi-press picks one button.
+            WORD pick = pressed & static_cast<WORD>(-static_cast<int>(pressed));
+            // Don't allow Back as the bind (it's the hold key).
+            if (pick != XINPUT_GAMEPAD_BACK) { opendojo::config::notify_captured_pad_btn(pick); }
+        }
+        // While capturing, don't fire the chord — return so a stray
+        // Back+button during binding doesn't toggle the menu.
+        if (g_menu_visible.load()) {
+            // Still feed ImGui below so the UI stays responsive.
+        } else {
+            return;
+        }
+    }
+
+    // --- Chord: Back held + configured button rising edge -> toggle ---
+    if (back_held) {
+        const WORD bind = opendojo::config::toggle_pad_btn();
+        if ((pressed & bind) && !opendojo::config::is_pad_capturing()) { toggle_menu(); }
+    }
+
+    // --- ImGui nav feed (only when menu is visible) ---
+    if (!g_menu_visible.load()) return;
+
+    ImGuiIO& io = ImGui::GetIO();
+    auto edge = [&](WORD mask, ImGuiKey key) {
+        if (pressed & mask) io.AddKeyEvent(key, true);
+        if (released & mask) io.AddKeyEvent(key, false);
+    };
+    edge(XINPUT_GAMEPAD_A, ImGuiKey_GamepadFaceDown);
+    edge(XINPUT_GAMEPAD_B, ImGuiKey_GamepadFaceRight);
+    edge(XINPUT_GAMEPAD_X, ImGuiKey_GamepadFaceLeft);
+    edge(XINPUT_GAMEPAD_Y, ImGuiKey_GamepadFaceUp);
+    // ImGui's gamepad nav distinguishes "Activate" (A / GamepadFaceDown)
+    // from "Text Input" (Y / GamepadFaceUp): A clicks buttons but does
+    // NOT enter InputText edit mode, while Y does. Mirror A onto Y so
+    // pressing A on a text field also focuses it for typing. Y has no
+    // other binding outside InputText, so this is side-effect-free.
+    edge(XINPUT_GAMEPAD_A, ImGuiKey_GamepadFaceUp);
+    edge(XINPUT_GAMEPAD_DPAD_LEFT, ImGuiKey_GamepadDpadLeft);
+    edge(XINPUT_GAMEPAD_DPAD_RIGHT, ImGuiKey_GamepadDpadRight);
+    edge(XINPUT_GAMEPAD_DPAD_UP, ImGuiKey_GamepadDpadUp);
+    edge(XINPUT_GAMEPAD_DPAD_DOWN, ImGuiKey_GamepadDpadDown);
+    edge(XINPUT_GAMEPAD_LEFT_SHOULDER, ImGuiKey_GamepadL1);
+    edge(XINPUT_GAMEPAD_RIGHT_SHOULDER, ImGuiKey_GamepadR1);
+    edge(XINPUT_GAMEPAD_START, ImGuiKey_GamepadStart);
+    edge(XINPUT_GAMEPAD_BACK, ImGuiKey_GamepadBack);
+
+    // Triggers as analog L2/R2.
+    const float lt = static_cast<float>(state.Gamepad.bLeftTrigger) / 255.0f;
+    const float rt = static_cast<float>(state.Gamepad.bRightTrigger) / 255.0f;
+    io.AddKeyAnalogEvent(ImGuiKey_GamepadL2, lt > 0.10f, lt);
+    io.AddKeyAnalogEvent(ImGuiKey_GamepadR2, rt > 0.10f, rt);
+
+    // Left + right sticks as analog nav, with the standard XInput deadzone.
+    constexpr float kStickDz = 8689.0f / 32767.0f;
+    auto stick = [&](SHORT raw, ImGuiKey neg, ImGuiKey pos) {
+        const float v = static_cast<float>(raw) / 32767.0f;
+        const float a = v < 0 ? -v : v;
+        const float n = a > kStickDz ? (a - kStickDz) / (1.0f - kStickDz) : 0.0f;
+        io.AddKeyAnalogEvent(v < 0 ? neg : pos, n > 0.10f, n);
+        io.AddKeyAnalogEvent(v < 0 ? pos : neg, false, 0.0f);
+    };
+    stick(state.Gamepad.sThumbLX, ImGuiKey_GamepadLStickLeft, ImGuiKey_GamepadLStickRight);
+    stick(state.Gamepad.sThumbLY, ImGuiKey_GamepadLStickDown, ImGuiKey_GamepadLStickUp);
+    stick(state.Gamepad.sThumbRX, ImGuiKey_GamepadRStickLeft, ImGuiKey_GamepadRStickRight);
+    stick(state.Gamepad.sThumbRY, ImGuiKey_GamepadRStickDown, ImGuiKey_GamepadRStickUp);
 }
 
 // Per-frame rendering. Pulled into its own function so we can wrap it in
@@ -641,6 +816,7 @@ HRESULT STDMETHODCALLTYPE hook_present(IDXGISwapChain* self, UINT sync_interval,
                 "after %u attempts — press F12 to toggle",
                 self, attempts);
             install_keyboard_hooks();
+            install_xinput_hooks();
         } else {
             OPENDOJO_LOG("  rejected: init_imgui_resources failed mid-way");
             sc3->Release();
@@ -651,7 +827,9 @@ HRESULT STDMETHODCALLTYPE hook_present(IDXGISwapChain* self, UINT sync_interval,
     }
 
     // Keyboard toggle hotkey is handled inside opendojo_wndproc — see
-    // the WM_KEYDOWN branch there.
+    // the WM_KEYDOWN branch there. Gamepad chord + nav input comes from
+    // poll_gamepad() (cheap when no controller is connected).
+    poll_gamepad();
 
     // Autosave runs every frame regardless of menu visibility — it watches
     // for character/scene transitions and snapshots pool1 accordingly.

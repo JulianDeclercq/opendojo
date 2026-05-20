@@ -50,6 +50,13 @@ struct State {
     // so keyboard nav can start without a mouse click.
     bool needs_focus = true;
 
+    // Tab state for LB/RB cycling. `active_tab` tracks which tab is
+    // currently drawn; `pending_tab` is set to -1 normally and to a
+    // target index on the frame we want to force-select via
+    // ImGuiTabItemFlags_SetSelected.
+    int active_tab = 0;
+    int pending_tab = -1;
+
     ToastState toast;
 };
 
@@ -214,9 +221,7 @@ void draw_export_tab() {
     ImGui::InputText("Description", g_state.export_description, sizeof(g_state.export_description));
     ImGui::PopItemWidth();
 
-    ImGui::TextDisabled(
-        "Name -> filename slug. Leave blank for timestamp.\n"
-        "Character is autodetected from the live CPU player.");
+    ImGui::TextDisabled("Leave name blank for timestamp.");
 
     ImGui::Spacing();
 
@@ -246,20 +251,6 @@ void draw_status_tab() {
         ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.5f, 1), "ready");
     } else {
         ImGui::TextColored(ImVec4(1, 0.7f, 0.3f, 1), "not ready - record once in practice mode");
-    }
-
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
-
-    {
-        bool en = opendojo::autosave::is_enabled();
-        if (ImGui::Checkbox("Autosave/autoload per character", &en)) {
-            opendojo::autosave::set_enabled(en);
-        }
-        ImGui::TextDisabled(
-            "Saves your recordings per CPU character when you switch chars or\n"
-            "leave practice. Restores them when you load that character again.");
     }
 
     ImGui::Spacing();
@@ -320,8 +311,45 @@ std::string vk_name(std::uint32_t vk) {
     return buf;
 }
 
+// Human label for an XInput button mask. Matches XINPUT_GAMEPAD_*
+// values; the menu only ever shows one button at a time so we don't
+// need to handle combined masks.
+const char* pad_btn_name(std::uint16_t mask) {
+    switch (mask) {
+        case 0x1000: return "A";
+        case 0x2000: return "B";
+        case 0x4000: return "X";
+        case 0x8000: return "Y";
+        case 0x0010: return "Start";
+        case 0x0020: return "Back";
+        case 0x0001: return "DPad Up";
+        case 0x0002: return "DPad Down";
+        case 0x0004: return "DPad Left";
+        case 0x0008: return "DPad Right";
+        case 0x0100: return "LB";
+        case 0x0200: return "RB";
+        case 0x0040: return "LS";
+        case 0x0080: return "RS";
+        default: return "(unbound)";
+    }
+}
+
 void draw_settings_tab() {
     ImGui::TextDisabled("Persisted to opendojo/config.json");
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    {
+        bool en = opendojo::autosave::is_enabled();
+        if (ImGui::Checkbox("Autosave/autoload per character", &en)) {
+            opendojo::autosave::set_enabled(en);
+        }
+        ImGui::TextDisabled(
+            "Saves your recordings per CPU character when you switch chars or\n"
+            "leave practice. Restores them when you load that character again.");
+    }
+
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
@@ -357,6 +385,41 @@ void draw_settings_tab() {
             show_toast(std::string("Toggle key bound to ") + vk_name(pressed));
         }
     }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    ImGui::TextUnformatted("Controller toggle chord");
+    ImGui::Spacing();
+
+    const auto pad_btn = opendojo::config::toggle_pad_btn();
+    ImGui::Text("Current binding: ");
+    ImGui::SameLine();
+    ImGui::TextColored(ImVec4(0.55f, 0.95f, 0.65f, 1), "Back + %s", pad_btn_name(pad_btn));
+
+    ImGui::Spacing();
+
+    const bool pad_capturing = opendojo::config::is_pad_capturing();
+    if (!pad_capturing) {
+        if (ImGui::Button("Rebind controller...", ImVec2(200, 0))) {
+            opendojo::config::start_pad_capture();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Reset to Y", ImVec2(160, 0))) {
+            opendojo::config::set_toggle_pad_btn(0x8000);  // XINPUT_GAMEPAD_Y
+            show_toast("Controller chord reset to Back + Y");
+        }
+    } else {
+        ImGui::TextColored(ImVec4(1, 0.85f, 0.4f, 1),
+                           "Press any controller button... (Back cancels)");
+        auto pressed_btn = opendojo::config::consume_captured_pad_btn();
+        if (pressed_btn != 0) {
+            opendojo::config::set_toggle_pad_btn(pressed_btn);
+            show_toast(std::string("Controller chord bound to Back + ") +
+                       pad_btn_name(pressed_btn));
+        }
+    }
 }
 
 void draw_about_tab() {
@@ -365,12 +428,13 @@ void draw_about_tab() {
     ImGui::TextWrapped(
         "Save and share practice-mode recordings as text drill files. "
         "Each drill contains one or more recordings; loading places them "
-        "into the in-game recording slots so you can practice scenarios offline.");
+        "into the in-game recording slots.");
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
-    ImGui::Text("Toggle this menu: %s  (rebindable in Settings tab)",
-                vk_name(opendojo::config::toggle_vk()).c_str());
+    ImGui::Text("Toggle this menu: %s  or  Back + %s  (both rebindable)",
+                vk_name(opendojo::config::toggle_vk()).c_str(),
+                pad_btn_name(opendojo::config::toggle_pad_btn()));
     ImGui::Spacing();
     ImGui::TextDisabled("Drill files + config live in opendojo/ next to the game executable.");
 }
@@ -432,32 +496,42 @@ void draw() {
         return;
     }
 
+    // Gamepad L1/R1 cycle through tabs (rising-edge). The events were
+    // fed earlier this frame by render_hook::poll_gamepad, so checking
+    // here picks them up in time for the tab bar to honor SetSelected.
+    struct TabDef {
+        const char* name;
+        void (*draw)();
+    };
+    const TabDef tabs[] = {
+        {"Drills", &draw_drills_tab}, {"Export", &draw_export_tab},
+        {"Status", &draw_status_tab}, {"Settings", &draw_settings_tab},
+        {"About", &draw_about_tab},
+    };
+    constexpr int kTabCount = static_cast<int>(sizeof(tabs) / sizeof(tabs[0]));
+
+    if (ImGui::IsKeyPressed(ImGuiKey_GamepadL1, false)) {
+        g_state.pending_tab = (g_state.active_tab - 1 + kTabCount) % kTabCount;
+    } else if (ImGui::IsKeyPressed(ImGuiKey_GamepadR1, false)) {
+        g_state.pending_tab = (g_state.active_tab + 1) % kTabCount;
+    }
+
     if (ImGui::BeginTabBar("##tabs")) {
-        if (ImGui::BeginTabItem("Drills")) {
-            // First-frame focus: anchor the nav cursor inside the tab
-            // so keyboard can move around immediately.
-            if (g_state.needs_focus) ImGui::SetKeyboardFocusHere();
-            draw_drills_tab();
-            ImGui::EndTabItem();
-        }
-        if (ImGui::BeginTabItem("Export")) {
-            draw_export_tab();
-            ImGui::EndTabItem();
-        }
-        if (ImGui::BeginTabItem("Status")) {
-            draw_status_tab();
-            ImGui::EndTabItem();
-        }
-        if (ImGui::BeginTabItem("Settings")) {
-            draw_settings_tab();
-            ImGui::EndTabItem();
-        }
-        if (ImGui::BeginTabItem("About")) {
-            draw_about_tab();
-            ImGui::EndTabItem();
+        for (int i = 0; i < kTabCount; ++i) {
+            ImGuiTabItemFlags flags = 0;
+            if (i == g_state.pending_tab) flags |= ImGuiTabItemFlags_SetSelected;
+            if (ImGui::BeginTabItem(tabs[i].name, nullptr, flags)) {
+                g_state.active_tab = i;
+                // First-frame focus on the initial tab: anchor the nav
+                // cursor so keyboard/gamepad can move around immediately.
+                if (g_state.needs_focus && i == 0) ImGui::SetKeyboardFocusHere();
+                tabs[i].draw();
+                ImGui::EndTabItem();
+            }
         }
         ImGui::EndTabBar();
     }
+    g_state.pending_tab = -1;
 
     draw_toast();
     ImGui::End();

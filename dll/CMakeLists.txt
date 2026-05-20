@@ -74,6 +74,13 @@ target_include_directories(imgui_static PUBLIC
     "${imgui_SOURCE_DIR}"
     "${imgui_SOURCE_DIR}/backends")
 target_compile_features(imgui_static PUBLIC cxx_std_17)
+# Disable the Win32 backend's own XInput polling. We feed gamepad input
+# ourselves via AddKeyEvent from poll_gamepad(), reading real state via
+# the trampoline so it sees through our gamepad-masking hook. Without
+# this define, imgui_impl_win32's per-frame XInputGetState call sees the
+# masked zero state (since it calls the OS XInputGetState which we hook)
+# and overwrites our real events.
+target_compile_definitions(imgui_static PRIVATE IMGUI_IMPL_WIN32_DISABLE_GAMEPAD)
 if(MSVC)
     # ImGui upstream produces /W4 warnings; silence them to keep our build clean.
     target_compile_options(imgui_static PRIVATE /W0)
@@ -131,6 +138,36 @@ target_link_options(opendojo PRIVATE "/DEF:${OPENDOJO_PROXY_DEF}")
 set_target_properties(opendojo PROPERTIES
     OUTPUT_NAME "${OPENDOJO_PROXY}"
     PREFIX      "")
+
+# ---------------------------------------------------------------------------
+# clang-format: run before each build so the tree stays formatted. Hints
+# cover the VS BuildTools / Community LLVM install paths and a PATH lookup.
+# If clang-format isn't found we skip silently (CI / fresh machines without
+# LLVM still build).
+# ---------------------------------------------------------------------------
+find_program(OPENDOJO_CLANG_FORMAT
+    NAMES clang-format
+    HINTS
+        "C:/Program Files (x86)/Microsoft Visual Studio/2019/BuildTools/VC/Tools/Llvm/x64/bin"
+        "C:/Program Files (x86)/Microsoft Visual Studio/2019/BuildTools/VC/Tools/Llvm/bin"
+        "C:/Program Files (x86)/Microsoft Visual Studio/2019/Community/VC/Tools/Llvm/x64/bin"
+        "C:/Program Files (x86)/Microsoft Visual Studio/2022/Community/VC/Tools/Llvm/x64/bin"
+        "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/Llvm/x64/bin"
+        "C:/Program Files/LLVM/bin")
+
+if(OPENDOJO_CLANG_FORMAT)
+    file(GLOB OPENDOJO_FORMAT_SRCS
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/*.hpp")
+    add_custom_command(TARGET opendojo PRE_BUILD
+        COMMAND ${OPENDOJO_CLANG_FORMAT} -i -style=file ${OPENDOJO_FORMAT_SRCS}
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        COMMENT "clang-format: formatting dll/src"
+        VERBATIM)
+    message(STATUS "OpenDojo: clang-format = ${OPENDOJO_CLANG_FORMAT}")
+else()
+    message(STATUS "OpenDojo: clang-format not found — skipping format step")
+endif()
 
 # ---------------------------------------------------------------------------
 # Install: convenience target so iteration is one command. Defaults to
