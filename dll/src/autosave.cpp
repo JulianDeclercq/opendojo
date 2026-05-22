@@ -67,7 +67,7 @@ std::filesystem::path autosave_path(std::string_view character) {
     fname.reserve(16 + character.size());
     fname += "_autosave_";
     fname.append(character.data(), character.size());
-    fname += ".drill";
+    fname += ".drill.txt";
     return commands::drills_dir() / fname;
 }
 
@@ -102,19 +102,22 @@ void ensure_initialized() {
 }
 
 // Snapshot every populated slot into a Drill and write it to disk.
-// Returns false only on a real I/O / encode error; an empty pool1 (no
-// recordings to save) is treated as a success no-op so we don't spam
-// retries.
+// Returns false only on a real I/O / encode error. Always overwrites
+// the existing autosave file for this character. If no slots are
+// populated, the file is *deleted* — the autosave should always
+// reflect current state, not stale data.
 bool save_for(std::string_view character) {
-    if (!subsystems::pool1()) return false;
+    auto path = autosave_path(character);
 
     std::size_t populated_slots = 0;
     for (std::size_t i = 0; i < slot::USER_SLOTS; ++i) {
         if (slot::is_populated(i)) ++populated_slots;
     }
     if (populated_slots == 0) {
-        // Nothing to save — but don't overwrite an existing autosave file
-        // with an empty one. Just leave whatever was there.
+        std::error_code ec;
+        std::filesystem::remove(path, ec);  // no-op if file isn't there
+        OPENDOJO_LOG("autosave: %s has no recordings — cleared autosave file",
+                     std::string(character).c_str());
         return true;
     }
 
@@ -134,12 +137,17 @@ bool save_for(std::string_view character) {
     d.character = std::string(character);
 
     for (std::size_t i = 0; i < slot::USER_SLOTS; ++i) {
-        if (!slot::is_populated(i)) continue;
-        std::uint8_t buf[slot::SLOT_PITCH];
-        if (!slot::read(i, buf)) continue;
+        auto slot_kind = slot::kind(i);
+        if (slot_kind == slot::Kind::Empty) continue;
         char rn[32];
         std::snprintf(rn, sizeof(rn), "slot %zu", i + 1);
-        d.recordings.push_back(drill::make_recording(rn, buf));
+        if (slot_kind == slot::Kind::MoveList) {
+            d.recordings.push_back(drill::make_movelist_recording(rn, slot::movelist_move_id(i)));
+        } else {
+            std::uint8_t buf[slot::SLOT_PITCH];
+            if (!slot::read(i, buf)) continue;
+            d.recordings.push_back(drill::make_live_recording(rn, buf));
+        }
     }
     if (d.recordings.empty()) return true;
 
@@ -150,7 +158,6 @@ bool save_for(std::string_view character) {
         return false;
     }
 
-    auto path = autosave_path(character);
     auto text = drill::encode_text(d);
     std::ofstream f(path, std::ios::binary | std::ios::trunc);
     if (!f) {
@@ -199,14 +206,6 @@ void clear_pending() {
     g_s.round_wait_frames = 0;
 }
 
-// Debug bisect markers. Create the named file inside opendojo/ to
-// disable that stage of the autoload pipeline. Used to narrow down which
-// write group is causing the round-intro input freeze.
-bool dbg_skip(const char* marker_name) {
-    std::error_code ec;
-    return std::filesystem::exists(commands::drills_dir() / marker_name, ec);
-}
-
 }  // anonymous namespace
 
 bool is_enabled() {
@@ -224,14 +223,26 @@ void set_enabled(bool on) {
     g_s.enabled = on;
     OPENDOJO_LOG("autosave: %s", on ? "enabled" : "disabled");
 
-    // Treat the toggle as a "reset point": snapshot the current state into
+    // Treat the toggle as a reset point: snapshot current state into
     // prev_* so we don't immediately fire a transition save/load on the
-    // very next tick.
+    // next tick.
     auto cpu = players::detect_cpu();
     g_s.prev_detected = cpu.detected;
     g_s.prev_character_id = cpu.character_id;
     g_s.prev_character_name = cpu.character_name;
     clear_pending();
+}
+
+void flush_now() {
+    ensure_initialized();
+    if (!g_s.enabled) return;
+    // Use the latest tracked character. prev_* is updated each tick to
+    // reflect whatever's live, so even at WM_CLOSE time this points at
+    // the character we were just practicing against.
+    if (!g_s.prev_detected) return;
+    if (g_s.prev_character_name.empty()) return;
+    OPENDOJO_LOG("autosave: flush_now for %s", g_s.prev_character_name.c_str());
+    save_for(g_s.prev_character_name);
 }
 
 void tick() {
@@ -287,28 +298,14 @@ void tick() {
         } else if (g_s.frames_until_retry > 0) {
             --g_s.frames_until_retry;
         } else {
-            // Bisect: check which stages are currently disabled via debug
-            // marker files in opendojo/. Log per-tick so the user
-            // sees exactly what ran on each attempt.
-            const bool skip_pool = dbg_skip("_dbg_skip_pool");
-            const bool skip_load = dbg_skip("_dbg_skip_load");
-            const bool skip_finalize = dbg_skip("_dbg_skip_finalize");
-            OPENDOJO_LOG("autosave: bisect stages — pool=%s load=%s finalize=%s",
-                         skip_pool ? "SKIP" : "run", skip_load ? "SKIP" : "run",
-                         skip_finalize ? "SKIP" : "run");
-
-            if (!skip_pool) { subsystems::ensure_pool_allocated(); }
-
-            LoadResult rs = LoadResult::Ok;  // pretend success if load is skipped
-            if (!skip_load) { rs = try_load_once(g_s.pending_load); }
+            subsystems::ensure_pool_allocated();
+            LoadResult rs = try_load_once(g_s.pending_load);
 
             if (rs == LoadResult::Ok) {
-                if (!skip_finalize) {
-                    if (!subsystems::mark_session_loaded(true)) {
-                        OPENDOJO_LOG(
-                            "autosave: mark_session_loaded returned false "
-                            "(see prior log for which chain link)");
-                    }
+                if (!subsystems::mark_session_loaded(true)) {
+                    OPENDOJO_LOG(
+                        "autosave: mark_session_loaded returned false "
+                        "(see prior log for which chain link)");
                 }
                 OPENDOJO_LOG(
                     "autosave: autoload complete for %s "

@@ -2,6 +2,7 @@
 
 #include "imgui.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstring>
 #include <string>
@@ -41,6 +42,14 @@ struct State {
     // character. Disabled automatically when no CPU is detected.
     bool show_all_drills = false;
 
+    // Drills tab sort. Autosaves are always pinned to the top regardless;
+    // this only controls how the regular drills below them are ordered.
+    enum class Sort {
+        Name,
+        Newest,
+    };
+    Sort sort_mode = Sort::Name;
+
     // Export form buffers.
     char export_name[96] = "";
     char export_description[160] = "";
@@ -71,6 +80,17 @@ void show_toast(std::string text, bool is_error = false) {
 void refresh_drills_if_needed() {
     if (!g_state.drills_dirty) return;
     g_state.drills = opendojo::commands::list_drills();
+    // Autosaves first, then the regular drills in the user-chosen order.
+    std::sort(g_state.drills.begin(), g_state.drills.end(),
+              [](const opendojo::commands::DrillHeader& a,
+                 const opendojo::commands::DrillHeader& b) {
+                  if (a.is_autosave != b.is_autosave) return a.is_autosave;
+                  if (g_state.sort_mode == State::Sort::Newest) {
+                      // Filesystem mtime; descending (newer first).
+                      return a.mtime > b.mtime;
+                  }
+                  return a.name < b.name;
+              });
     g_state.drills_dirty = false;
 }
 
@@ -94,6 +114,23 @@ void draw_drills_tab() {
     }
 
     if (ImGui::Button("Refresh")) g_state.drills_dirty = true;
+    ImGui::SameLine();
+    ImGui::TextDisabled("|");
+    ImGui::SameLine();
+    ImGui::TextDisabled("Sort:");
+    ImGui::SameLine();
+    {
+        int sort_idx = static_cast<int>(g_state.sort_mode);
+        if (ImGui::RadioButton("Name", &sort_idx, static_cast<int>(State::Sort::Name))) {
+            g_state.sort_mode = State::Sort::Name;
+            g_state.drills_dirty = true;
+        }
+        ImGui::SameLine();
+        if (ImGui::RadioButton("Newest", &sort_idx, static_cast<int>(State::Sort::Newest))) {
+            g_state.sort_mode = State::Sort::Newest;
+            g_state.drills_dirty = true;
+        }
+    }
     ImGui::SameLine();
     ImGui::TextDisabled("|");
     ImGui::SameLine();
@@ -123,21 +160,86 @@ void draw_drills_tab() {
         return;
     }
 
+    // Split into autosaves (rendered first with distinct styling) and
+    // regular drills (in a standard table).
+    std::vector<std::size_t> autosave_idxs;
+    std::vector<std::size_t> regular_idxs;
+    for (std::size_t i = 0; i < g_state.drills.size(); ++i) {
+        const auto& d = g_state.drills[i];
+        if (can_filter && d.character != cpu.character_name) continue;
+        if (d.is_autosave) {
+            autosave_idxs.push_back(i);
+        } else {
+            regular_idxs.push_back(i);
+        }
+    }
+
+    // ---- Autosaves block --------------------------------------------------
+    if (!autosave_idxs.empty()) {
+        ImGui::TextColored(ImVec4(0.7f, 0.85f, 1.0f, 1), "Auto-saves");
+        ImGui::TextDisabled(
+            "Overwritten every time you switch characters or leave practice. "
+            "Click \"Save as drill\" to keep a copy.");
+        ImGui::Spacing();
+        for (std::size_t idx : autosave_idxs) {
+            const auto& d = g_state.drills[idx];
+            ImGui::PushID(static_cast<int>(idx));
+            ImGui::TextColored(ImVec4(0.7f, 0.85f, 1.0f, 1), "%s", d.name.c_str());
+            ImGui::SameLine();
+            ImGui::TextDisabled("(%zu rec)", d.recording_count);
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Add##autosave_add")) {
+                auto r = opendojo::commands::load_drill(d.path,
+                                                        opendojo::commands::LoadMode::AppendToFree);
+                if (r.ok) opendojo::subsystems::mark_session_loaded(true);
+                show_toast(r.message, !r.ok);
+            }
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Replace##autosave_replace")) {
+                auto r = opendojo::commands::load_drill(d.path,
+                                                        opendojo::commands::LoadMode::ReplaceAll);
+                if (r.ok) opendojo::subsystems::mark_session_loaded(true);
+                show_toast(r.message, !r.ok);
+            }
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Save as drill##autosave_save")) {
+                std::string new_name = d.character.empty() ? "saved" : d.character + "_saved";
+                auto r = opendojo::commands::copy_drill(d.path, new_name);
+                show_toast(r.message, !r.ok);
+                if (r.ok) g_state.drills_dirty = true;
+            }
+            ImGui::PopID();
+        }
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+    }
+
+    // ---- Regular drills table --------------------------------------------
     const ImGuiTableFlags flags = ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                                   ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_ScrollY;
-    if (ImGui::BeginTable("drills", 5, flags, ImVec2(0, 320))) {
+    if (regular_idxs.empty()) {
+        if (!autosave_idxs.empty()) {
+            ImGui::TextDisabled("No saved drills yet — use Export or \"Save as drill\" above.");
+        }
+    } else if (ImGui::BeginTable("drills", 5, flags, ImVec2(0, 320))) {
         ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch, 2.4f);
         ImGui::TableSetupColumn("Character", ImGuiTableColumnFlags_WidthStretch, 1.0f);
         ImGui::TableSetupColumn("Recordings", ImGuiTableColumnFlags_WidthStretch, 0.8f);
-        ImGui::TableSetupColumn("Add", ImGuiTableColumnFlags_WidthFixed, 90.0f);
-        ImGui::TableSetupColumn("Replace", ImGuiTableColumnFlags_WidthFixed, 100.0f);
+        // Scale-aware column widths: compute the pixel width of the button
+        // label at the current font size + frame padding, since ImGui's
+        // WidthFixed takes raw pixels (not scaled).
+        const auto pad = ImGui::GetStyle().FramePadding.x;
+        const float add_w = ImGui::CalcTextSize("Add").x + pad * 4;
+        const float repl_w = ImGui::CalcTextSize("Replace").x + pad * 4;
+        ImGui::TableSetupColumn("Add", ImGuiTableColumnFlags_WidthFixed, add_w);
+        ImGui::TableSetupColumn("Replace", ImGuiTableColumnFlags_WidthFixed, repl_w);
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableHeadersRow();
 
-        for (std::size_t i = 0; i < g_state.drills.size(); ++i) {
-            const auto& d = g_state.drills[i];
-            if (can_filter && d.character != cpu.character_name) continue;
-            ImGui::PushID(static_cast<int>(i));
+        for (std::size_t idx : regular_idxs) {
+            const auto& d = g_state.drills[idx];
+            ImGui::PushID(static_cast<int>(idx));
             ImGui::TableNextRow();
 
             ImGui::TableSetColumnIndex(0);
@@ -193,15 +295,19 @@ void draw_export_tab() {
     ImGui::TextDisabled("Save current recordings as a shareable drill file.");
     ImGui::Spacing();
 
-    if (!opendojo::subsystems::pool1()) {
-        ImGui::TextColored(ImVec4(1, 0.7f, 0.3f, 1),
-                           "Not ready. Enter practice mode and record once to initialize.");
-        return;
-    }
-
+    // We can export whenever the gameplay subsystem is reachable AND
+    // at least one slot is populated. Live recordings require pool1
+    // to be allocated, but move-list slots live in the recordpool (a
+    // different subsystem) and don't depend on pool1.
     std::size_t populated = 0;
     for (std::size_t i = 0; i < opendojo::slot::USER_SLOTS; ++i) {
         if (opendojo::slot::is_populated(i)) ++populated;
+    }
+    if (populated == 0) {
+        ImGui::TextColored(
+            ImVec4(1, 0.7f, 0.3f, 1),
+            "No recordings to export. Record a move or select one from the move list first.");
+        return;
     }
     ImGui::Text("Recordings ready to export: %zu / %zu", populated, opendojo::slot::USER_SLOTS);
 
@@ -227,7 +333,7 @@ void draw_export_tab() {
 
     const bool can_export = populated > 0;
     if (!can_export) ImGui::BeginDisabled();
-    if (ImGui::Button("Export", ImVec2(160, 0))) {
+    if (ImGui::Button("Export", ImVec2(0, 0))) {
         auto r = opendojo::commands::export_current_slots(g_state.export_name,
                                                           g_state.export_description,
                                                           "" /* character: always autodetected */,
@@ -243,14 +349,18 @@ void draw_export_tab() {
 }
 
 void draw_status_tab() {
-    const bool ready = opendojo::subsystems::pool1() != 0;
+    // Practice-mode state is determined by the gameplay subsystem being
+    // reachable. pool1 only allocates after the first live recording —
+    // gating on it would hide existing movelist slots (which live in
+    // the recordpool subsystem and are independently allocated).
+    const bool in_practice = opendojo::subsystems::lookup(opendojo::subsystems::KEY_GAMEPLAY) != 0;
 
     ImGui::Text("Status: ");
     ImGui::SameLine();
-    if (ready) {
+    if (in_practice) {
         ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.5f, 1), "ready");
     } else {
-        ImGui::TextColored(ImVec4(1, 0.7f, 0.3f, 1), "not ready - record once in practice mode");
+        ImGui::TextColored(ImVec4(1, 0.7f, 0.3f, 1), "not in practice mode");
     }
 
     ImGui::Spacing();
@@ -259,9 +369,10 @@ void draw_status_tab() {
 
     const ImGuiTableFlags flags = ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                                   ImGuiTableFlags_SizingStretchProp;
-    if (ImGui::BeginTable("recordings", 2, flags)) {
+    if (ImGui::BeginTable("recordings", 3, flags)) {
         ImGui::TableSetupColumn("Recording", ImGuiTableColumnFlags_WidthFixed, 140.0f);
-        ImGui::TableSetupColumn("Events", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("Kind", ImGuiTableColumnFlags_WidthFixed, 120.0f);
+        ImGui::TableSetupColumn("Detail", ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableHeadersRow();
 
         for (std::size_t i = 0; i < opendojo::slot::USER_SLOTS; ++i) {
@@ -269,18 +380,34 @@ void draw_status_tab() {
             ImGui::TableSetColumnIndex(0);
             ImGui::Text("Recording %zu", i + 1);
             ImGui::TableSetColumnIndex(1);
-            if (!ready) {
+            if (!in_practice) {
+                ImGui::TextDisabled("-");
+                ImGui::TableSetColumnIndex(2);
                 ImGui::TextDisabled("-");
                 continue;
             }
-            if (!opendojo::slot::is_populated(i)) {
+            auto k = opendojo::slot::kind(i);
+            if (k == opendojo::slot::Kind::Empty) {
                 ImGui::TextDisabled("empty");
+                ImGui::TableSetColumnIndex(2);
+                ImGui::TextDisabled("-");
             } else {
-                auto n = opendojo::slot::event_count(i);
-                ImGui::Text("%u", static_cast<unsigned>(n));
+                ImGui::TextUnformatted(opendojo::slot::kind_name(k));
+                ImGui::TableSetColumnIndex(2);
+                if (k == opendojo::slot::Kind::MoveList) {
+                    ImGui::TextUnformatted("saved");
+                } else {
+                    ImGui::Text("%u events", static_cast<unsigned>(opendojo::slot::event_count(i)));
+                }
             }
         }
         ImGui::EndTable();
+    }
+
+    ImGui::Spacing();
+    if (ImGui::Button("Dump slot flags to log")) {
+        opendojo::slot::dump_flag_state();
+        show_toast("Dumped slot flag state to opendojo.log");
     }
 }
 
@@ -342,12 +469,13 @@ void draw_settings_tab() {
 
     {
         bool en = opendojo::autosave::is_enabled();
-        if (ImGui::Checkbox("Autosave/autoload per character", &en)) {
+        if (ImGui::Checkbox("Autosave / autoload per character", &en)) {
             opendojo::autosave::set_enabled(en);
         }
         ImGui::TextDisabled(
-            "Saves your recordings per CPU character when you switch chars or\n"
-            "leave practice. Restores them when you load that character again.");
+            "Snapshots your current recordings per CPU character on every\n"
+            "character switch or practice exit. Reloads on return. The\n"
+            "autosave file always overwrites the previous one.");
     }
 
     ImGui::Spacing();
@@ -369,9 +497,9 @@ void draw_settings_tab() {
     // returns 0 for everything while the menu is up.
     const bool capturing = opendojo::config::is_capturing();
     if (!capturing) {
-        if (ImGui::Button("Rebind...", ImVec2(160, 0))) { opendojo::config::start_capture(); }
+        if (ImGui::Button("Rebind...", ImVec2(0, 0))) { opendojo::config::start_capture(); }
         ImGui::SameLine();
-        if (ImGui::Button("Reset to F12", ImVec2(160, 0))) {
+        if (ImGui::Button("Reset to F12", ImVec2(0, 0))) {
             opendojo::config::set_toggle_vk(VK_F12);
             show_toast("Toggle key reset to F12");
         }
@@ -402,11 +530,11 @@ void draw_settings_tab() {
 
     const bool pad_capturing = opendojo::config::is_pad_capturing();
     if (!pad_capturing) {
-        if (ImGui::Button("Rebind controller...", ImVec2(200, 0))) {
+        if (ImGui::Button("Rebind controller...", ImVec2(0, 0))) {
             opendojo::config::start_pad_capture();
         }
         ImGui::SameLine();
-        if (ImGui::Button("Reset to Y", ImVec2(160, 0))) {
+        if (ImGui::Button("Reset to Y", ImVec2(0, 0))) {
             opendojo::config::set_toggle_pad_btn(0x8000);  // XINPUT_GAMEPAD_Y
             show_toast("Controller chord reset to Back + Y");
         }

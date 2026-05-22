@@ -59,6 +59,20 @@ void opendojo::memory::read_bytes(std::uintptr_t addr, void* out, std::size_t n)
     std::memcpy(out, reinterpret_cast<const void*>(addr), n);
 }
 
+bool opendojo::memory::is_readable(std::uintptr_t addr, std::size_t n) {
+    if (!addr || !n) return false;
+    MEMORY_BASIC_INFORMATION mbi{};
+    if (VirtualQuery(reinterpret_cast<LPCVOID>(addr), &mbi, sizeof(mbi)) == 0) return false;
+    if (mbi.State != MEM_COMMIT) return false;
+    constexpr DWORD READABLE = PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READ |
+                               PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
+    if ((mbi.Protect & READABLE) == 0) return false;
+    if (mbi.Protect & PAGE_GUARD) return false;
+    // The region must cover the requested range.
+    auto region_end = reinterpret_cast<std::uintptr_t>(mbi.BaseAddress) + mbi.RegionSize;
+    return addr + n <= region_end;
+}
+
 void opendojo::memory::write_bytes(std::uintptr_t addr, const void* src, std::size_t n) {
     if (!addr || !src || !n) return;
     std::memcpy(reinterpret_cast<void*>(addr), src, n);

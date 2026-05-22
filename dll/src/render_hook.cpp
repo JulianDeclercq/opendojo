@@ -29,6 +29,7 @@ extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg
 #include "config.hpp"
 #include "log.hpp"
 #include "menu.hpp"
+#include "subsystems.hpp"
 #include "theme.hpp"
 
 namespace opendojo::render_hook {
@@ -124,6 +125,13 @@ WNDPROC g_orig_wndproc = nullptr;
 HWND g_subclassed_hwnd = nullptr;
 
 LRESULT CALLBACK opendojo_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
+    // Flush the autosave on close. The normal "leave practice" and
+    // "character switch" triggers don't fire when the user quits the
+    // game window directly from practice mode, so we hook the close
+    // request here. Safe even if the game cancels the close — saving
+    // the same state again is idempotent.
+    if (msg == WM_CLOSE) { opendojo::autosave::flush_now(); }
+
     if (g_imgui_ready.load()) {
         // WM_KEYDOWN handling. lparam bit 30 ("previous key state"):
         // 0 means the key was up immediately before this message,
@@ -143,12 +151,14 @@ LRESULT CALLBACK opendojo_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lpa
                 return 0;  // consume the captured key
             }
 
-            // Toggle hotkey — fires on rising edge of the bound VK.
-            // Event-driven via WndProc; no per-frame poll.
+            // Toggle hotkey — fires on rising edge of the bound VK,
+            // but only inside practice mode (the menu is practice-only).
+            // We consume the key either way so the game never sees it
+            // accidentally do something else.
             const auto vk = opendojo::config::toggle_vk();
             if (wparam == vk) {
-                if (!was_down) toggle_menu();
-                return 0;  // consume so game never sees the hotkey
+                if (!was_down && opendojo::subsystems::in_practice()) toggle_menu();
+                return 0;
             }
         }
 
@@ -466,28 +476,63 @@ void install_keyboard_hooks() {
 }
 
 // =============================================================================
-// XInput gamepad — masking hook + own-polling for menu nav and chord toggle
+// XInput gamepad — masking hook, chord detection, ImGui input feed
 // =============================================================================
 //
 // Tekken imports XINPUT1_3 (verified via IAT). Plus we lazily probe a few
 // other xinput*.dll versions in case middleware (Steam Input, etc.) routes
 // through a different one.
 //
-// Game-facing hook (xinput_get_state_hook) returns zeroed Gamepad state
-// while the menu is visible, so D-pad / sticks / face buttons don't bleed
-// into the match. Our own polling calls the trampoline (g_xinput_orig)
-// directly to see real state, which drives:
-//   1. The Back + <bind> chord that opens/closes the menu
-//   2. ImGui nav input (sticks, dpad, face buttons) while menu is visible
-//   3. Pad-bind capture for the Settings tab
+// The game-facing hooks (xinput_get_state_hook / _ex_hook) do three things:
+//   1. Forward the call to the real XInput trampoline to read the raw state.
+//   2. Run our chord-detection + pad-bind-capture logic on that pre-mask
+//      state. This is the OpenDojo equivalent of a per-frame poll, but it
+//      piggybacks on Tekken's own per-frame XInput call — no extra XInput
+//      cost beyond the hook trampoline overhead.
+//   3. Mask the state to zero before returning to the game whenever the
+//      menu is visible, so D-pad / face buttons don't bleed into the match.
+//
+// ImGui nav input (sticks, buttons) is fed separately from render_frame
+// (render thread, only when menu visible) to avoid touching ImGui from
+// whatever thread Tekken happens to poll XInput on.
 
 using XInputGetState_t = DWORD(WINAPI*)(DWORD, XINPUT_STATE*);
 
 XInputGetState_t g_xinput_orig = nullptr;     // trampoline for non-Ex
 XInputGetState_t g_xinput_ex_orig = nullptr;  // trampoline for ordinal-100 Ex
 
+// Edge-detect chord + handle pad-bind capture on Tekken's own XInput call.
+// Called from both xinput_get_state_hook variants for user_index 0, after
+// the trampoline read but before masking. Thread-safe — only does atomic
+// loads/stores and (rarely) a log call.
+void process_gamepad_for_chord(WORD buttons) {
+    static WORD last_buttons = 0;
+    const WORD pressed = buttons & ~last_buttons;
+    last_buttons = buttons;
+
+    // Pad-bind capture: first non-Back rising edge wins. Back cancels.
+    if (opendojo::config::is_pad_capturing()) {
+        if (pressed & XINPUT_GAMEPAD_BACK) {
+            opendojo::config::cancel_pad_capture();
+        } else if (pressed != 0) {
+            WORD pick = pressed & static_cast<WORD>(-static_cast<int>(pressed));
+            if (pick != XINPUT_GAMEPAD_BACK) { opendojo::config::notify_captured_pad_btn(pick); }
+        }
+        return;  // don't fire the chord while binding
+    }
+
+    // Chord: Back held + configured button rising edge → toggle menu.
+    const bool back_held = (buttons & XINPUT_GAMEPAD_BACK) != 0;
+    if (!back_held) return;
+    const WORD bind = opendojo::config::toggle_pad_btn();
+    if (pressed & bind) toggle_menu();
+}
+
 DWORD WINAPI xinput_get_state_hook(DWORD user_index, XINPUT_STATE* state) {
     DWORD r = g_xinput_orig(user_index, state);
+    if (r == ERROR_SUCCESS && state && user_index == 0 && opendojo::subsystems::in_practice()) {
+        process_gamepad_for_chord(state->Gamepad.wButtons);
+    }
     if (g_menu_visible.load() && r == ERROR_SUCCESS && state) {
         std::memset(&state->Gamepad, 0, sizeof(state->Gamepad));
     }
@@ -495,6 +540,9 @@ DWORD WINAPI xinput_get_state_hook(DWORD user_index, XINPUT_STATE* state) {
 }
 DWORD WINAPI xinput_get_state_ex_hook(DWORD user_index, XINPUT_STATE* state) {
     DWORD r = g_xinput_ex_orig(user_index, state);
+    if (r == ERROR_SUCCESS && state && user_index == 0 && opendojo::subsystems::in_practice()) {
+        process_gamepad_for_chord(state->Gamepad.wButtons);
+    }
     if (g_menu_visible.load() && r == ERROR_SUCCESS && state) {
         std::memset(&state->Gamepad, 0, sizeof(state->Gamepad));
     }
@@ -545,11 +593,12 @@ void install_xinput_hooks() {
     }
 }
 
-// Combined per-frame gamepad poll. Cheap when no controller is connected.
-// Reads real state via the trampoline so it sees through our masking hook.
-void poll_gamepad() {
+// Feed the current gamepad state into ImGui as nav input. Called from
+// render_frame (render thread, only when the menu is visible) — keeps all
+// ImGui calls on a single thread. Edge detection uses its own static
+// tracker, independent of the chord tracker in process_gamepad_for_chord.
+void feed_gamepad_to_imgui() {
     if (!g_xinput_orig) return;
-
     XINPUT_STATE state{};
     if (g_xinput_orig(0, &state) != ERROR_SUCCESS) return;
 
@@ -558,36 +607,6 @@ void poll_gamepad() {
     const WORD pressed = buttons & ~last_buttons;
     const WORD released = ~buttons & last_buttons;
     last_buttons = buttons;
-
-    const bool back_held = (buttons & XINPUT_GAMEPAD_BACK) != 0;
-
-    // --- Pad-bind capture: first rising-edge non-Back button wins ---
-    if (opendojo::config::is_pad_capturing()) {
-        if (pressed & XINPUT_GAMEPAD_BACK) {
-            opendojo::config::cancel_pad_capture();
-        } else if (pressed != 0) {
-            // Pick lowest set bit so multi-press picks one button.
-            WORD pick = pressed & static_cast<WORD>(-static_cast<int>(pressed));
-            // Don't allow Back as the bind (it's the hold key).
-            if (pick != XINPUT_GAMEPAD_BACK) { opendojo::config::notify_captured_pad_btn(pick); }
-        }
-        // While capturing, don't fire the chord — return so a stray
-        // Back+button during binding doesn't toggle the menu.
-        if (g_menu_visible.load()) {
-            // Still feed ImGui below so the UI stays responsive.
-        } else {
-            return;
-        }
-    }
-
-    // --- Chord: Back held + configured button rising edge -> toggle ---
-    if (back_held) {
-        const WORD bind = opendojo::config::toggle_pad_btn();
-        if ((pressed & bind) && !opendojo::config::is_pad_capturing()) { toggle_menu(); }
-    }
-
-    // --- ImGui nav feed (only when menu is visible) ---
-    if (!g_menu_visible.load()) return;
 
     ImGuiIO& io = ImGui::GetIO();
     auto edge = [&](WORD mask, ImGuiKey key) {
@@ -641,6 +660,7 @@ void poll_gamepad() {
 void render_frame() {
     ImGui_ImplDX12_NewFrame();
     ImGui_ImplWin32_NewFrame();
+    feed_gamepad_to_imgui();
     ImGui::NewFrame();
     opendojo::menu::draw();
     ImGui::Render();
@@ -826,13 +846,34 @@ HRESULT STDMETHODCALLTYPE hook_present(IDXGISwapChain* self, UINT sync_interval,
         return g_present_orig(self, sync_interval, flags);
     }
 
-    // Keyboard toggle hotkey is handled inside opendojo_wndproc — see
-    // the WM_KEYDOWN branch there. Gamepad chord + nav input comes from
-    // poll_gamepad() (cheap when no controller is connected).
-    poll_gamepad();
+    // ---- Practice-mode gate ------------------------------------------------
+    // Tekken is frame-rate-critical and gameplay is the whole point of
+    // the mod, so OpenDojo does as close to zero work outside practice
+    // mode as possible. One hash lookup per frame, then everything else
+    // is gated on the result. Inside practice we still keep per-frame
+    // work to a minimum (a gamepad poll + an autosave tick that mostly
+    // early-returns); the only heavy path (ImGui render) is further
+    // gated on the menu being visible.
+    const bool in_practice = opendojo::subsystems::in_practice();
+    if (!in_practice) {
+        // If the user left practice with the menu open, auto-close so we
+        // don't keep drawing it on top of menus/replays.
+        if (g_menu_visible.exchange(false)) {
+            OPENDOJO_LOG("render_hook: left practice — closing menu");
+        }
+        // Autosave still gets a chance to fire its "leaving practice"
+        // save during the brief exit-grace window; it early-returns
+        // after grace and does ~one cheap subsystem lookup per frame.
+        opendojo::autosave::tick();
+        return g_present_orig(self, sync_interval, flags);
+    }
 
-    // Autosave runs every frame regardless of menu visibility — it watches
-    // for character/scene transitions and snapshots pool1 accordingly.
+    // Keyboard toggle is handled in opendojo_wndproc. Gamepad chord +
+    // pad-bind capture run inside the XInput hook itself (driven by
+    // Tekken's own per-frame XInput call) — no separate poll. ImGui's
+    // gamepad nav feed lives in render_frame so it only runs when the
+    // menu is visible. See the XInput section comment for the full
+    // rationale.
     opendojo::autosave::tick();
 
     if (!g_menu_visible.load()) { return g_present_orig(self, sync_interval, flags); }

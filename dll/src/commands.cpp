@@ -56,7 +56,7 @@ bool write_whole_file(const std::filesystem::path& p, const void* data, std::siz
     return f.good();
 }
 
-// Parse just enough of a .drill file to populate a DrillHeader. Reads up to
+// Parse just enough of a drill file to populate a DrillHeader. Reads up to
 // the first `---` line or 4 KiB, whichever comes first.
 bool parse_header_only(const std::filesystem::path& path, DrillHeader& out) {
     std::ifstream f(path, std::ios::binary);
@@ -104,16 +104,24 @@ bool parse_header_only(const std::filesystem::path& path, DrillHeader& out) {
     }
     if (out.character.empty()) out.character = "unknown";
     if (out.name.empty()) out.name = path.stem().string();
+    // Detect autosaves by the leading-underscore convention used by autosave.cpp.
+    auto stem = path.stem().string();                         // foo.drill (without .txt)
+    auto core = std::filesystem::path(stem).stem().string();  // foo
+    out.is_autosave = (core.rfind("_autosave_", 0) == 0);
+    // mtime drives "Newest" sort. Falls back to file_time_type{} (epoch)
+    // on error, which sorts as oldest — fine for a corrupt/inaccessible file.
+    std::error_code mec;
+    out.mtime = std::filesystem::last_write_time(path, mec);
     return true;
 }
 
 std::filesystem::path resolve_collision(const std::filesystem::path& dir, std::string_view slug) {
     auto base = std::filesystem::path(std::wstring(slug.begin(), slug.end()));
-    auto candidate = dir / (base.wstring() + L".drill");
+    auto candidate = dir / (base.wstring() + L".drill.txt");
     if (!std::filesystem::exists(candidate)) return candidate;
     for (int i = 2; i < 1000; ++i) {
         wchar_t suffix[16];
-        swprintf_s(suffix, L"_%d.drill", i);
+        swprintf_s(suffix, L"_%d.drill.txt", i);
         candidate = dir / (base.wstring() + suffix);
         if (!std::filesystem::exists(candidate)) return candidate;
     }
@@ -145,13 +153,16 @@ std::vector<DrillHeader> list_drills() {
         if (ec) break;
         if (!entry.is_regular_file()) continue;
         auto p = entry.path();
-        if (p.extension() != L".drill") continue;
+        // We use a doubled extension `.drill.txt` so Discord and other
+        // text-aware previewers render the contents inline. Match on the
+        // stem's extension to filter only our files.
+        if (p.extension() != L".txt") continue;
+        if (p.stem().extension() != L".drill") continue;
         DrillHeader h;
         if (parse_header_only(p, h)) out.push_back(std::move(h));
     }
 
-    std::sort(out.begin(), out.end(),
-              [](const DrillHeader& a, const DrillHeader& b) { return a.name < b.name; });
+    // Caller chooses the sort order (see SortMode in menu.cpp).
     return out;
 }
 
@@ -169,7 +180,16 @@ LoadResult load_drill(const std::filesystem::path& path, LoadMode mode) {
     }
     auto& d = decoded.drill;
 
-    if (!opendojo::subsystems::pool1()) {
+    // pool1 is only required if the drill contains live recordings.
+    // Movelist-only drills can be imported without pool1 being allocated.
+    bool needs_pool1 = false;
+    for (const auto& rec : d.recordings) {
+        if (rec.kind == opendojo::drill::Kind::Live) {
+            needs_pool1 = true;
+            break;
+        }
+    }
+    if (needs_pool1 && !opendojo::subsystems::pool1()) {
         r.message = "not ready - record once in practice mode first";
         return r;
     }
@@ -181,20 +201,26 @@ LoadResult load_drill(const std::filesystem::path& path, LoadMode mode) {
         r.message = buf;
         return r;
     }
+    // Install one decoded recording into the chosen target slot. Live
+    // recordings get the 7202 bytes + the live flag chain; movelist
+    // recordings get a move_id + the movelist flag.
+    auto install = [&](std::size_t target,
+                       const opendojo::drill::Recording& rec) -> opendojo::slot::WriteStatus {
+        if (rec.kind == opendojo::drill::Kind::MoveList) {
+            return opendojo::slot::set_movelist(target, rec.move_id);
+        }
+        auto addr = opendojo::slot::address(target);
+        if (!addr) return opendojo::slot::WriteStatus::PoolNotAllocated;
+        opendojo::memory::write_bytes(addr, rec.slot_bytes.data(), opendojo::slot::SLOT_PITCH);
+        return opendojo::slot::set_recorded_flag(target, true);
+    };
 
     if (mode == LoadMode::ReplaceAll) {
         for (std::size_t i = 0; i < opendojo::slot::USER_SLOTS; ++i) {
             opendojo::slot::set_recorded_flag(i, false);
         }
         for (std::size_t i = 0; i < d.recordings.size(); ++i) {
-            auto addr = opendojo::slot::address(i);
-            if (!addr) {
-                r.message = "pool not allocated";
-                return r;
-            }
-            opendojo::memory::write_bytes(addr, d.recordings[i].slot_bytes.data(),
-                                          opendojo::slot::SLOT_PITCH);
-            auto s = opendojo::slot::set_recorded_flag(i, true);
+            auto s = install(i, d.recordings[i]);
             if (s != opendojo::slot::WriteStatus::Ok) {
                 char buf[128];
                 std::snprintf(buf, sizeof(buf), "slot %zu: %s", i + 1, opendojo::slot::describe(s));
@@ -225,14 +251,7 @@ LoadResult load_drill(const std::filesystem::path& path, LoadMode mode) {
         return r;
     }
     for (std::size_t i = 0; i < d.recordings.size(); ++i) {
-        auto addr = opendojo::slot::address(free_slots[i]);
-        if (!addr) {
-            r.message = "pool not allocated";
-            return r;
-        }
-        opendojo::memory::write_bytes(addr, d.recordings[i].slot_bytes.data(),
-                                      opendojo::slot::SLOT_PITCH);
-        auto s = opendojo::slot::set_recorded_flag(free_slots[i], true);
+        auto s = install(free_slots[i], d.recordings[i]);
         if (s != opendojo::slot::WriteStatus::Ok) {
             char buf[128];
             std::snprintf(buf, sizeof(buf), "slot %zu: %s", free_slots[i] + 1,
@@ -253,10 +272,10 @@ ExportResult export_current_slots(std::string_view drill_name, std::string_view 
                                   std::string_view character, std::string_view cpu_side) {
     ExportResult r;
 
-    if (!opendojo::subsystems::pool1()) {
-        r.message = "not ready - record once in practice mode first";
-        return r;
-    }
+    // We don't gate on pool1 here — movelist slots live in the recordpool
+    // subsystem and don't require pool1 to be allocated. If there are
+    // genuinely no recordings (or we're outside practice), the empty-set
+    // check below catches it with a clearer message.
     if (!ensure_drills_dir()) {
         r.message = "couldn't create drills directory";
         return r;
@@ -283,12 +302,18 @@ ExportResult export_current_slots(std::string_view drill_name, std::string_view 
     }
 
     for (std::size_t i = 0; i < opendojo::slot::USER_SLOTS; ++i) {
-        if (!opendojo::slot::is_populated(i)) continue;
-        std::uint8_t bytes[opendojo::slot::SLOT_PITCH];
-        if (!opendojo::slot::read(i, bytes)) continue;
+        auto slot_kind = opendojo::slot::kind(i);
+        if (slot_kind == opendojo::slot::Kind::Empty) continue;
         char rec_name[32];
         std::snprintf(rec_name, sizeof(rec_name), "slot %zu", i + 1);
-        d.recordings.push_back(opendojo::drill::make_recording(rec_name, bytes));
+        if (slot_kind == opendojo::slot::Kind::MoveList) {
+            auto move_id = opendojo::slot::movelist_move_id(i);
+            d.recordings.push_back(opendojo::drill::make_movelist_recording(rec_name, move_id));
+        } else {
+            std::uint8_t bytes[opendojo::slot::SLOT_PITCH];
+            if (!opendojo::slot::read(i, bytes)) continue;
+            d.recordings.push_back(opendojo::drill::make_live_recording(rec_name, bytes));
+        }
     }
     if (d.recordings.empty()) {
         r.message = "no slots contain recordings to export";
@@ -313,6 +338,45 @@ ExportResult export_current_slots(std::string_view drill_name, std::string_view 
     r.path = path;
     r.message = buf;
     OPENDOJO_LOG("export_current_slots: %s -> %ls", r.message.c_str(), path.c_str());
+    return r;
+}
+
+CopyResult copy_drill(const std::filesystem::path& src, std::string_view new_name) {
+    CopyResult r;
+    auto text = read_whole_file(src);
+    if (text.empty()) {
+        r.message = "couldn't read source drill";
+        return r;
+    }
+    auto decoded = opendojo::drill::decode_text(text);
+    if (!decoded.error.empty()) {
+        r.message = "decode failed: " + decoded.error;
+        return r;
+    }
+    auto& d = decoded.drill;
+    if (!new_name.empty()) d.name = std::string(new_name);
+    // The new file's mtime is its creation time — that's what "Newest"
+    // sort keys off, so no need for an in-file timestamp.
+
+    if (!ensure_drills_dir()) {
+        r.message = "couldn't create drills directory";
+        return r;
+    }
+    auto encoded = opendojo::drill::encode_text(d);
+    auto slug = opendojo::drill::slugify(d.name);
+    auto path = resolve_collision(drills_dir(), slug);
+    if (path.empty()) {
+        r.message = "filename collision storm - pick a different name";
+        return r;
+    }
+    if (!write_whole_file(path, encoded.data(), encoded.size())) {
+        r.message = "failed to write drill file";
+        return r;
+    }
+    r.ok = true;
+    r.path = path;
+    r.message = "saved as new drill";
+    OPENDOJO_LOG("copy_drill: %ls -> %ls", src.c_str(), path.c_str());
     return r;
 }
 

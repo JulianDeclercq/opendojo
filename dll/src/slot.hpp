@@ -3,73 +3,121 @@
 #include <cstddef>
 #include <cstdint>
 
-// Practice-mode slot read/write. Pool1 stores 9 fixed-size slots, of which 8
-// are user-facing (indices 0..7) and slot 8 is an in-engine scratch buffer
-// for the in-progress recording. We only operate on the 8 user slots.
+// Practice-mode slot read/write.
 //
-// Slot layout (7202 bytes / 0x1C22 each):
-//   +0x00..+0x01   uint16  event_count (little-endian)
-//   +0x02..+...    event_count * 4-byte input transition records
-//   +...           zero-padding to fill the slot pitch
+// Both live recordings AND move-list "send to slot" entries live in
+// pool1 (`+0x986AC70`), 7202 bytes per slot, max ~1800 events. The
+// event format is 4 bytes — `+0..1` dir/mark+buttons word, `+2` aux,
+// `+3` frames — preceded by a uint16 event_count at slot offset 0.
 //
-// Writing a slot involves two memory regions:
-//   1. The slot bytes in pool1.
-//   2. The "this slot has a recording" flag in the gameplay subsystem.
+// What distinguishes the two is the per-slot flag uint32 at
+// `gameplay + 0x484 + (slot + side*8)*8`:
 //
-// The flag is critical — without it the in-game practice menu shows "Not Set"
-// and playback refuses to fire, even with valid bytes in pool1.
+//   0 = empty
+//   1 = move-list (programmatic move sequence)
+//   2 = live (user-recorded inputs)
+//
+// (Empirically confirmed via dump_flag_state() — see RE_NOTES.)
+//
+// pool2 (`+0x986AC78`, 1202 B/slot) and the +0x504/+0x544 flag arrays
+// stay at zero during both live recording and move-list select; they
+// belong to a separate feature (Action Interval Recording is the
+// likely owner). OpenDojo currently ignores them.
 
 namespace opendojo::slot {
 
-inline constexpr std::size_t SLOT_PITCH = 0x1C22;  // 7202 bytes per slot
+inline constexpr std::size_t SLOT_PITCH = 0x1C22;  // pool1 entry, 7202 bytes
 inline constexpr std::size_t USER_SLOTS = 8;
 
-// Per-slot "is recorded" flag inside the gameplay subsystem.
-// Each entry is 8 bytes; the flag uint32 sits at +4 within its entry.
+// Per-slot flag array within the gameplay subsystem. Side 0 only — see
+// the file-header note for the side caveat. Flag values:
+//   0 = empty
+//   1 = move-list (programmatic move sequence)
+//   2 = live (user-recorded)
 inline constexpr std::uintptr_t GAMEPLAY_SLOT_BASE = 0x480;
 inline constexpr std::uintptr_t GAMEPLAY_SLOT_STRIDE = 0x08;
-inline constexpr std::uintptr_t GAMEPLAY_SLOT_FLAG = 0x04;
+inline constexpr std::uintptr_t GAMEPLAY_SLOT_FLAG = 0x04;  // uint32 within each 8B entry
+inline constexpr std::uint32_t FLAG_EMPTY = 0u;
+inline constexpr std::uint32_t FLAG_MOVELIST = 1u;
+inline constexpr std::uint32_t FLAG_LIVE = 2u;
+
+// Move-list payload storage. All 8 movelist slots share a single
+// uint32[8] array stored at:
+//   recordpool[cpu_side].obj + 0x44 + slot*4
+// where recordpool = lookup(KEY_RECORDPOOL), each element is 0x140 bytes,
+// cpu_side = gameplay[+0x47C] XOR 1. The dispatcher FUN_145f24060 writes
+// the move ID via FUN_14191f220 (verified via flag dump). A move ID of
+// 0xFFFFFFFF means "no movelist set" (the cleared sentinel).
+inline constexpr std::uintptr_t RECORDPOOL_OBJ_STRIDE = 0x140;
+inline constexpr std::uintptr_t RECORDPOOL_MOVE_ID_BASE = 0x44;  // obj + 0x44 + slot*4
+inline constexpr std::uint32_t MOVE_ID_NONE = 0xFFFFFFFFu;
+
+// What's currently in this slot, if anything.
+enum class Kind {
+    Empty,
+    Live,      // user-recorded inputs (flag == 2)
+    MoveList,  // move-list "send to slot" entry (flag == 1)
+};
+
+const char* kind_name(Kind k);
+
+// Detect which pool holds slot N's data, if any.
+Kind kind(std::size_t slot_idx);
 
 // Result codes for any operation that touches subsystems. Read-only ops
-// (read, event_count, address) don't return this — they just return 0 / false
-// since they only need pool1 to be allocated.
+// don't return this — they just return 0 / false since they only need
+// the relevant pool to be allocated.
 enum class WriteStatus {
     Ok,
     InvalidSlot,        // slot_idx out of range
-    PoolNotAllocated,   // pool1 ptr still 0 — record once in practice first
+    PoolNotAllocated,   // pool ptr still 0 — record once in practice first
     NotInPracticeMode,  // a subsystem lookup returned 0 — user left the scene
 };
 
-// Human-readable rendering for log lines.
 const char* describe(WriteStatus s);
 
-// Absolute address of slot N's first byte within pool1. Returns 0 if pool1
-// isn't allocated yet or slot_idx is out of range.
+// Absolute address of slot N's pool1 entry. Returns 0 if pool1 isn't
+// allocated yet or slot_idx is out of range. Used by the import path,
+// which currently only writes pool1.
 std::uintptr_t address(std::size_t slot_idx);
 
-// uint16 event count at the start of slot N. 0 if pool not allocated.
-// NOTE: this returns the raw value from pool1, which can read non-zero
-// for slots the user has cleared via the in-game "Not set" option —
-// clearing only flips the gameplay flag, it doesn't zero pool1 bytes.
-// Use is_populated() for the truth signal on "does this slot count?".
+// uint16 event count for slot N, read from whichever pool currently
+// holds it (per kind()). 0 if empty or pool not allocated.
 std::uint16_t event_count(std::size_t slot_idx);
 
-// True iff the gameplay subsystem's per-slot flag is set (== 2), meaning
-// the game considers this slot to have a real recording. Falls back to
-// false (rather than a stale pool1 read) when the gameplay subsystem
-// isn't resolved yet — outside practice mode we report all empty.
+// True iff kind(slot_idx) != Empty.
 bool is_populated(std::size_t slot_idx);
 
-// Copy the full 7202-byte slot payload into `out`. Caller owns the buffer.
-// Returns false if pool not allocated or slot out of range.
+// Copy slot N's data into `out` (which must be at least SLOT_PITCH
+// bytes). For move-list slots the actual pool2 bytes (POOL2_PITCH) are
+// copied and the trailing tail is zero-padded so downstream code that
+// assumes SLOT_PITCH-sized buffers doesn't read stale memory.
+// Returns false if the slot is empty or the relevant pool isn't allocated.
 bool read(std::size_t slot_idx, std::uint8_t* out);
 
-// Write 7202 bytes into the slot and set the per-slot "recorded" flag.
-// Requires subsystems to be alive (practice mode active).
+// Write 7202 bytes into pool1 slot N and set the per-slot "recorded"
+// flag. Pool1-only; the import path doesn't write pool2 yet.
 WriteStatus write(std::size_t slot_idx, const std::uint8_t* data);
 
-// Flip just the recorded flag for a slot (4 writes across gameplay /
-// singleton / subB / subC). Exposed for diagnostics & tests.
+// Flip just the recorded flag for a pool1 slot (4 writes across
+// gameplay / singleton / subB / subC). Exposed for diagnostics & tests.
 WriteStatus set_recorded_flag(std::size_t slot_idx, bool recorded);
+
+// Read the move-list move ID for slot N. Returns 0xFFFFFFFF (MOVE_ID_NONE)
+// if the slot is not a movelist slot, or the recordpool subsystem isn't
+// resolved.
+std::uint32_t movelist_move_id(std::size_t slot_idx);
+
+// Write the move-list move ID for slot N + set the movelist flag.
+// The move ID is what the in-game "Select from Move List → send to
+// slot" UI would have stored. Returns Ok on success.
+WriteStatus set_movelist(std::size_t slot_idx, std::uint32_t move_id);
+
+// One-shot diagnostic: log per-slot values from all three flag arrays
+// (+0x484, +0x504, +0x544 — both side-0 and side-1 entries for the +0x504
+// table) along with pool1 / pool2 event counts. Use this to confirm
+// which flags the game's natural record path writes vs which we set
+// ourselves.
+void dump_flag_state();
 
 }  // namespace opendojo::slot

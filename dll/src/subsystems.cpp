@@ -46,6 +46,10 @@ std::uintptr_t opendojo::subsystems::lookup(std::uintptr_t key_offset) {
     return 0;
 }
 
+bool opendojo::subsystems::in_practice() {
+    return lookup(KEY_GAMEPLAY) != 0;
+}
+
 std::uintptr_t opendojo::subsystems::pool1() {
     return memory::read_u64(memory::polaris(POOL1_PTR_OFFSET));
 }

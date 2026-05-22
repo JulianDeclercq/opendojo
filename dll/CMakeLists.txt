@@ -112,7 +112,6 @@ add_library(opendojo SHARED
     src/commands.cpp
     src/config.cpp
     src/drill.cpp
-    src/hotkeys.cpp
     src/log.cpp
     src/memory.cpp
     src/menu.cpp

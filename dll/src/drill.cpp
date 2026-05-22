@@ -308,6 +308,16 @@ void encode_recording(std::string& out, const Recording& r, std::size_t idx_one_
     out += hdr;
     std::snprintf(hdr, sizeof(hdr), "name:         %s\n", r.name.c_str());
     out += hdr;
+    // Only emit `kind:` for non-live; old files implicitly mean live.
+    if (r.kind != Kind::Live) { out += "kind:         movelist\n"; }
+
+    if (r.kind == Kind::MoveList) {
+        // Movelist entries are just a move ID — no per-frame events.
+        std::snprintf(hdr, sizeof(hdr), "move_id:      %u\n", static_cast<unsigned>(r.move_id));
+        out += hdr;
+        return;
+    }
+
     std::snprintf(hdr, sizeof(hdr), "events:       %u\n", static_cast<unsigned>(r.event_count));
     out += hdr;
     std::snprintf(hdr, sizeof(hdr), "total_frames: %u\n", static_cast<unsigned>(r.total_frames));
@@ -367,11 +377,20 @@ std::string slugify(std::string_view name) {
     return out;
 }
 
-Recording make_recording(std::string name, const std::uint8_t* slot_bytes) {
+Recording make_live_recording(std::string name, const std::uint8_t* slot_bytes) {
     Recording r;
     r.name = std::move(name);
+    r.kind = Kind::Live;
     r.slot_bytes.assign(slot_bytes, slot_bytes + SLOT_PITCH);
     slot_count_and_frames(r.slot_bytes.data(), r.event_count, r.total_frames);
+    return r;
+}
+
+Recording make_movelist_recording(std::string name, std::uint32_t move_id) {
+    Recording r;
+    r.name = std::move(name);
+    r.kind = Kind::MoveList;
+    r.move_id = move_id;
     return r;
 }
 
@@ -427,11 +446,14 @@ TextResult decode_text(std::string_view text) {
 
     auto flush_recording = [&]() {
         if (section == Section::Recording) {
-            current.slot_bytes = pack_events(events);
-            current.event_count = static_cast<std::uint16_t>(events.size());
-            current.total_frames = 0;
-            for (auto& e : events)
-                current.total_frames += e[3];
+            // Movelist recordings carry only a move_id; no event lines.
+            if (current.kind != Kind::MoveList) {
+                current.slot_bytes = pack_events(events);
+                current.event_count = static_cast<std::uint16_t>(events.size());
+                current.total_frames = 0;
+                for (auto& e : events)
+                    current.total_frames += e[3];
+            }
             result.drill.recordings.push_back(std::move(current));
             current = Recording{};
             events.clear();
@@ -479,20 +501,36 @@ TextResult decode_text(std::string_view text) {
                 result.drill.cpu_side = std::string(val);
             else if (key == "recordings") { /* informational only — count comes from data */
             } else {
-                result.error = "unknown drill header key: ";
-                result.error.append(key.data(), key.size());
-                return result;
+                // Unknown drill-level keys are skipped so the format can
+                // gain new optional fields without breaking older readers.
             }
         } else {  // Section::Recording
             if (is_header) {
                 if (key == "name")
                     current.name = std::string(val);
-                else if (key == "events") {         /* informational */
+                else if (key == "kind") {
+                    if (val == "movelist")
+                        current.kind = Kind::MoveList;
+                    else if (val == "live")
+                        current.kind = Kind::Live;
+                    else {
+                        result.error = "unknown recording kind: ";
+                        result.error.append(val.data(), val.size());
+                        return result;
+                    }
+                } else if (key == "move_id") {
+                    try {
+                        current.move_id = static_cast<std::uint32_t>(std::stoul(std::string(val)));
+                    } catch (...) {
+                        result.error = "bad move_id: ";
+                        result.error.append(val.data(), val.size());
+                        return result;
+                    }
+                } else if (key == "events") {       /* informational */
                 } else if (key == "total_frames") { /* informational */
                 } else {
-                    result.error = "unknown recording header key: ";
-                    result.error.append(key.data(), key.size());
-                    return result;
+                    // Unknown per-recording keys are skipped — same forward-
+                    // compatibility rationale as drill-level keys above.
                 }
             } else {
                 std::array<std::uint8_t, 4> ev{};

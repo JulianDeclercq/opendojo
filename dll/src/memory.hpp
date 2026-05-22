@@ -39,4 +39,9 @@ void write_u8(std::uintptr_t addr, std::uint8_t v);
 void read_bytes(std::uintptr_t addr, void* out, std::size_t n);
 void write_bytes(std::uintptr_t addr, const void* src, std::size_t n);
 
+// VirtualQuery-based check that [addr, addr+n) is committed, readable,
+// and not a guard page. Use before dereferencing a pointer we don't
+// fully trust (e.g. raw fields that might be stale / garbage).
+bool is_readable(std::uintptr_t addr, std::size_t n);
+
 }  // namespace opendojo::memory

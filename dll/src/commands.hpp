@@ -24,15 +24,26 @@ struct DrillHeader {
     std::filesystem::path path;
     std::string name;
     std::string description;
-    std::string character;  // lowercase id; "unknown" if unset
-    std::string cpu_side;   // "p1" / "p2" / "" (unset)
+    std::string character;                    // lowercase id; "unknown" if unset
+    std::string cpu_side;                     // "p1" / "p2" / "" (unset)
+    std::filesystem::file_time_type mtime{};  // filesystem mtime, drives "Newest" sort
     std::size_t recording_count = 0;
+    bool is_autosave = false;  // filename starts with "_autosave_"
 };
 
-// Scan opendojo/ and return one entry per .drill file. Errors per
-// file are silently skipped (the menu shouldn't disappear because one file
-// is malformed). Sorted by name.
+// Scan opendojo/ and return one entry per drill file (`*.drill.txt`).
+// Errors per file are silently skipped (the menu shouldn't disappear
+// because one file is malformed). Caller is responsible for sorting.
 std::vector<DrillHeader> list_drills();
+
+// Copy an existing drill file into a fresh `.drill.txt` (typically used
+// to "save" an autosave to a permanent drill). Returns the new path.
+struct CopyResult {
+    bool ok = false;
+    std::filesystem::path path;
+    std::string message;
+};
+CopyResult copy_drill(const std::filesystem::path& src, std::string_view new_name);
 
 // How an import places its recordings into the 8 user slots.
 enum class LoadMode {

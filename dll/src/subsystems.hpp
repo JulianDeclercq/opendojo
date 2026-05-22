@@ -32,6 +32,10 @@ inline constexpr std::uintptr_t KEY_RECORDING =
     0x95371A4;  // recording subsystem; `this` arg pool_init expects
 inline constexpr std::uintptr_t KEY_PLAYERS_SUB =
     0x9537078;  // per-side Player* array natural finalize uses; not always resolved in our context
+inline constexpr std::uintptr_t KEY_RECORDPOOL =
+    0x9537308;  // TArray of per-CPU-side 0x140-byte objects; holds move-list slot payloads.
+                // Resolve via lookup(), then element[cpu_side] (each elem is 0x140 B), then
+                // (slot+1)*8*4 byte rows of 8 uint32 channels at +0x44.
 inline constexpr std::uintptr_t KEY_SUBB =
     0x953707C;  // playback-session-armed flag at +0x065; writing 0 mid-intro freezes input
 inline constexpr std::uintptr_t KEY_SUBC =
@@ -47,6 +51,13 @@ inline constexpr std::uintptr_t KEY_SUBD = 0x9537084;  // purpose unknown
 // and clear to 0 when the user exits practice mode. Always re-resolve at
 // the point of use — never cache the returned pointer across calls.
 std::uintptr_t lookup(std::uintptr_t key_offset);
+
+// Fast "are we currently in practice mode?" check. Used as the per-frame
+// gate for everything OpenDojo runs — menu render, gamepad poll, autosave
+// (which has its own grace). Returns true iff KEY_GAMEPLAY resolves
+// (the gameplay subsystem only exists in practice). One hash lookup
+// (~10 memory reads); cheap enough to call every frame.
+bool in_practice();
 
 // Recording-buffer pool bases. 0 until the game allocates them. Naturally
 // the game allocates both on the user's first practice recording per
