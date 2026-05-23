@@ -6,22 +6,31 @@
 #include "memory.hpp"
 #include "players.hpp"
 #include "practice_state.hpp"
+#include "signatures.hpp"
 
 namespace {
 
-// Polaris-side pool init function (FUN_1418e8e00). Takes the recording
-// subsystem (resolved via KEY_RECORDING) as `this`. Writes [recording+0x24]=0,
-// allocates pool1+pool2 if null, and memsets them. Idempotent.
-constexpr std::uintptr_t POOL_INIT_RVA = 0x18E8E00;
-
+// Polaris-side pool init function — historically at RVA 0x18E8E00
+// in v3.00.02, now resolved via AOB scan (see signatures.cpp).
+// Takes the recording subsystem (resolved via KEY_RECORDING) as `this`.
+// Writes [recording+0x24]=0, allocates pool1+pool2 if null, memsets them.
+// Idempotent.
 using PoolInitFn = void (*)(void* this_ptr);
 
 }  // anonymous namespace
 
-std::uintptr_t opendojo::subsystems::lookup(std::uintptr_t key_offset) {
-    auto base = memory::polaris_base();
-    if (!base) return 0;
-    auto ctx = memory::read_u64(base + CTX_PTR_OFFSET);
+std::uintptr_t opendojo::subsystems::lookup(std::uint32_t hash) {
+    // Prefer the AOB-resolved CTX address; fall back to the hardcoded
+    // offset if the get_ctx signature didn't resolve (e.g. patch broke
+    // the surrounding function layout). The fallback path matches the
+    // pre-AOB behavior exactly.
+    auto ctx_slot = signatures::ctx_ptr_addr();
+    if (!ctx_slot) {
+        auto base = memory::polaris_base();
+        if (!base) return 0;
+        ctx_slot = base + CTX_PTR_OFFSET;
+    }
+    auto ctx = memory::read_u64(ctx_slot);
     if (!ctx) return 0;
     auto map = memory::read_u64(ctx + 0x10);
     if (!map) return 0;
@@ -31,8 +40,7 @@ std::uintptr_t opendojo::subsystems::lookup(std::uintptr_t key_offset) {
     auto buckets = memory::read_u64(map + 0x110);
     if (!buckets) return 0;
 
-    auto key = memory::read_u32(base + key_offset);
-    auto bucket = buckets + (mask & key) * 0x10;
+    auto bucket = buckets + (mask & hash) * 0x10;
     auto first = memory::read_u64(bucket);
     auto entry = memory::read_u64(bucket + 8);
 
@@ -40,7 +48,7 @@ std::uintptr_t opendojo::subsystems::lookup(std::uintptr_t key_offset) {
     // — real chains are short, anything deeper means the data is corrupt
     // or we've snapshotted mid-resize.
     for (int steps = 0; entry && entry != sentinel && steps < 64; ++steps) {
-        if (memory::read_u32(entry + 0x10) == key) { return memory::read_u64(entry + 0x18); }
+        if (memory::read_u32(entry + 0x10) == hash) { return memory::read_u64(entry + 0x18); }
         if (entry == first) break;
         entry = memory::read_u64(entry + 8);
     }
@@ -54,11 +62,11 @@ bool opendojo::subsystems::in_practice() {
 }
 
 std::uintptr_t opendojo::subsystems::pool1() {
-    return memory::read_u64(memory::polaris(POOL1_PTR_OFFSET));
+    return memory::read_u64(signatures::pool1_ptr_addr());
 }
 
 std::uintptr_t opendojo::subsystems::pool2() {
-    return memory::read_u64(memory::polaris(POOL2_PTR_OFFSET));
+    return memory::read_u64(signatures::pool2_ptr_addr());
 }
 
 bool opendojo::subsystems::mark_session_loaded(bool loaded) {
@@ -100,10 +108,7 @@ bool opendojo::subsystems::mark_session_loaded(bool loaded) {
 }
 
 void opendojo::subsystems::ensure_pool_allocated() {
-    if (memory::read_u64(memory::polaris(POOL1_PTR_OFFSET)) != 0) return;
-
-    auto base = memory::polaris_base();
-    if (!base) return;
+    if (memory::read_u64(signatures::pool1_ptr_addr()) != 0) return;
 
     // Pass the real recording subsystem as `this` (not a stack dummy) so
     // pool_init's `[this+0x24] = 0` clear lands on the right object. We
@@ -116,11 +121,16 @@ void opendojo::subsystems::ensure_pool_allocated() {
         return;
     }
 
-    auto pool_init = reinterpret_cast<PoolInitFn>(base + POOL_INIT_RVA);
+    auto pool_init_addr = signatures::pool_init();
+    if (!pool_init_addr) {
+        OPENDOJO_LOG("subsystems: pool_init signature unresolved — skipping forced alloc");
+        return;
+    }
+    auto pool_init = reinterpret_cast<PoolInitFn>(pool_init_addr);
     pool_init(reinterpret_cast<void*>(recording));
 
-    auto p1 = memory::read_u64(memory::polaris(POOL1_PTR_OFFSET));
-    auto p2 = memory::read_u64(memory::polaris(POOL2_PTR_OFFSET));
+    auto p1 = memory::read_u64(signatures::pool1_ptr_addr());
+    auto p2 = memory::read_u64(signatures::pool2_ptr_addr());
     OPENDOJO_LOG("subsystems: force-allocated pool1=0x%llX pool2=0x%llX (recording=0x%llX)",
                  static_cast<unsigned long long>(p1), static_cast<unsigned long long>(p2),
                  static_cast<unsigned long long>(recording));

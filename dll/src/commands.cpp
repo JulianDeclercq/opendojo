@@ -398,7 +398,7 @@ void show_status() {
     // Log all resolved subsystem addresses — used to find character ID offsets.
     struct {
         const char* name;
-        std::uintptr_t key;
+        std::uint32_t key;
     } subsys[] = {
         {"gameplay", opendojo::subsystems::KEY_GAMEPLAY},
         {"singleton", opendojo::subsystems::KEY_SINGLETON},

@@ -62,13 +62,6 @@ struct State {
     // save from a few seconds prior captured the data.
     int frames_since_periodic_save = 0;
 
-    // One-shot "this is a fresh practice entry" flag. Set by
-    // on_practice_entered (the practice-slot 0→nonzero hook), cleared
-    // after we successfully queue an autoload. Currently kept around
-    // for set_enabled semantics but no longer load-bearing for the
-    // tick-side gate.
-    bool autoload_armed = false;
-
     // Frames since the current pending_load was queued. We always
     // wait at least MIN_WAIT_AFTER_QUEUE frames before processing,
     // regardless of round_active. Reason: on an intra-practice
@@ -79,6 +72,18 @@ struct State {
     // flags stomped, leaving the menu showing Empty even though the
     // drill loaded successfully into the pool.
     int frames_since_queue = 0;
+
+    // Post-write watchdog. Once an autoload completes, we monitor
+    // slot::is_populated for a few seconds — Tekken can finish swapping
+    // gameplay subsystems AFTER our write+verify (our writes landed in
+    // the soon-to-be-discarded subsystem; the freshly-installed one has
+    // empty flags). If the count drops to zero during the watch window,
+    // re-fire the load (capped at WATCH_REWRITE_LIMIT attempts to avoid
+    // fighting legitimate user clears).
+    std::string watched_character;  // empty = not watching
+    int frames_until_watch_check = 0;
+    int watch_remaining_frames = 0;
+    int watch_rewrites = 0;
 };
 State g_s;
 
@@ -88,6 +93,15 @@ constexpr int EXIT_GRACE_FRAMES = 5;           // keep ticking briefly after lea
 constexpr int MAX_ROUND_WAIT_FRAMES = 1800;    // 30s safety timeout if round-active never fires
 constexpr int MIN_WAIT_AFTER_QUEUE = 60;       // 1s minimum settle window before processing load
 constexpr int PERIODIC_SAVE_FRAMES = 30 * 60;  // re-snapshot every 30s of practice
+
+// Watchdog: keep checking for WATCH_TOTAL_FRAMES after a successful
+// autoload, at WATCH_CHECK_INTERVAL spacing. If slot flags go to zero
+// (Tekken cleared them after our write), re-fire load_drill up to
+// WATCH_REWRITE_LIMIT times. Total watch span ~5s — long enough to
+// cover Tekken's slowest subsystem-rebuild paths.
+constexpr int WATCH_TOTAL_FRAMES = 300;   // 5 seconds
+constexpr int WATCH_CHECK_INTERVAL = 30;  // 0.5s between checks
+constexpr int WATCH_REWRITE_LIMIT = 3;    // max self-heal attempts during watch
 
 std::filesystem::path autosave_path(std::string_view character) {
     // Character names are pure ASCII (lowercase a-z + digits + underscore)
@@ -210,6 +224,17 @@ enum class LoadResult {
     Failed,    // load_drill returned !ok — counts toward give-up threshold
 };
 
+// Count how many slots are populated *right now* from the game's
+// perspective (gameplay subsystem flags, which is what the UI reads).
+// Used by try_load_once to verify writes actually landed.
+std::size_t live_populated_count() {
+    std::size_t n = 0;
+    for (std::size_t i = 0; i < slot::USER_SLOTS; ++i) {
+        if (slot::is_populated(i)) ++n;
+    }
+    return n;
+}
+
 LoadResult try_load_once(std::string_view character) {
     auto path = autosave_path(character);
     std::error_code ec;
@@ -221,12 +246,25 @@ LoadResult try_load_once(std::string_view character) {
     if (!subsystems::pool1()) return LoadResult::NotReady;
 
     auto r = commands::load_drill(path, commands::LoadMode::ReplaceAll);
-    if (r.ok) {
-        OPENDOJO_LOG("autosave: loaded for %s — %s", std::string(character).c_str(),
-                     r.message.c_str());
-        return LoadResult::Ok;
+    if (!r.ok) return LoadResult::Failed;
+
+    // Verify the writes actually landed in the gameplay subsystem the
+    // game UI reads from. On intra-practice character switches the
+    // gameplay subsystem can still be mid-rebuild when our 1-second
+    // wait expires; load_drill returns ok but the writes go to addresses
+    // that get stomped moments later, leaving the UI showing Empty.
+    //
+    // We return Failed (not Ok) when verify fails, which counts toward
+    // MAX_FAILURES — the retry path then re-runs the whole load after
+    // RETRY_INTERVAL frames. By the third attempt (~3 seconds after the
+    // initial detect) Tekken is essentially always settled, so retry
+    // covers the transition window without spamming.
+    if (live_populated_count() == 0) {
+        OPENDOJO_LOG("autosave: writes for %s didn't stick — retrying",
+                     std::string(character).c_str());
+        return LoadResult::Failed;
     }
-    return LoadResult::Failed;
+    return LoadResult::Ok;
 }
 
 void clear_pending() {
@@ -235,6 +273,36 @@ void clear_pending() {
     g_s.frames_until_retry = 0;
     g_s.round_wait_frames = 0;
     g_s.frames_since_queue = 0;
+}
+
+void clear_watch() {
+    g_s.watched_character.clear();
+    g_s.frames_until_watch_check = 0;
+    g_s.watch_remaining_frames = 0;
+    g_s.watch_rewrites = 0;
+}
+
+// Re-fire load_drill for the watched character. Called by the watchdog
+// when it observes the slot flags going back to zero. Doesn't touch
+// pending_load state — that's already cleared by the time we get here;
+// the watchdog runs on its own.
+void watchdog_rewrite(std::string_view character) {
+    auto path = autosave_path(character);
+    std::error_code ec;
+    if (!std::filesystem::exists(path, ec)) return;  // nothing to load
+    if (!subsystems::pool1()) return;
+
+    auto r = commands::load_drill(path, commands::LoadMode::ReplaceAll);
+    if (r.ok) {
+        // Re-mark session loaded too — singleton/recording state may
+        // have been cleared with the slot flags.
+        subsystems::mark_session_loaded(true);
+        OPENDOJO_LOG("autosave: watchdog re-wrote %s (attempt %d)", std::string(character).c_str(),
+                     g_s.watch_rewrites + 1);
+    } else {
+        OPENDOJO_LOG("autosave: watchdog rewrite failed for %s: %s", std::string(character).c_str(),
+                     r.message.c_str());
+    }
 }
 
 }  // anonymous namespace
@@ -268,8 +336,8 @@ void set_enabled(bool on) {
     } else {
         g_s.prev_character_name.clear();
     }
-    g_s.autoload_armed = false;
     clear_pending();
+    clear_watch();
 }
 
 void flush_now() {
@@ -296,10 +364,8 @@ void on_practice_entered() {
     g_s.prev_character_id = 0;
     g_s.prev_character_name.clear();
     clear_pending();
+    clear_watch();
     g_s.frames_since_periodic_save = 0;
-    // Arm autoload for exactly this practice entry. The tick-side gate
-    // consumes the flag the first time it queues a load.
-    g_s.autoload_armed = true;
 }
 
 void tick() {
@@ -376,12 +442,40 @@ void tick() {
     // returned true immediately — leading to writes during the
     // transition and a delayed crash. The chain walk is gone now.)
     if (changed && cached.detected && cached_name) {
-        g_s.autoload_armed = false;  // consume; harmless if not set
         g_s.pending_load = cached_name;
         g_s.failures = 0;
         g_s.frames_until_retry = 0;
         g_s.round_wait_frames = 0;
         g_s.frames_since_queue = 0;
+        // Any new queued load supersedes an in-flight watchdog —
+        // we're switching characters, so the old watch is irrelevant.
+        clear_watch();
+    }
+
+    // Post-autoload watchdog. Polls slot::is_populated for a few seconds
+    // after a successful load — catches the case where Tekken finishes
+    // its subsystem rebuild AFTER our write+verify and the freshly
+    // installed gameplay subsystem has empty flags. Self-heals up to
+    // WATCH_REWRITE_LIMIT times before giving up.
+    if (!g_s.watched_character.empty()) {
+        if (g_s.watch_remaining_frames <= 0) {
+            clear_watch();
+        } else {
+            --g_s.watch_remaining_frames;
+            if (--g_s.frames_until_watch_check <= 0) {
+                g_s.frames_until_watch_check = WATCH_CHECK_INTERVAL;
+                if (live_populated_count() == 0) {
+                    if (g_s.watch_rewrites >= WATCH_REWRITE_LIMIT) {
+                        OPENDOJO_LOG("autosave: watchdog gave up on %s after %d rewrites",
+                                     g_s.watched_character.c_str(), g_s.watch_rewrites);
+                        clear_watch();
+                    } else {
+                        watchdog_rewrite(g_s.watched_character);
+                        ++g_s.watch_rewrites;
+                    }
+                }
+            }
+        }
     }
 
     // Pending load processing — gated on round-active for the reason above.
@@ -411,10 +505,19 @@ void tick() {
                         "autosave: mark_session_loaded returned false "
                         "(see prior log for which chain link)");
                 }
-                OPENDOJO_LOG(
-                    "autosave: autoload complete for %s "
-                    "(round-wait was %d frames)",
-                    g_s.pending_load.c_str(), g_s.round_wait_frames);
+                OPENDOJO_LOG("autosave: autoload complete for %s (round-wait %d frames)",
+                             g_s.pending_load.c_str(), g_s.round_wait_frames);
+                // Arm the post-write watchdog before clearing pending.
+                // We DO want to watch fresh-start drills too (the "no
+                // scratch drill" path returns Ok with nothing written);
+                // skip the watch only when there's nothing to defend.
+                std::error_code ec;
+                if (std::filesystem::exists(autosave_path(g_s.pending_load), ec)) {
+                    g_s.watched_character = g_s.pending_load;
+                    g_s.watch_remaining_frames = WATCH_TOTAL_FRAMES;
+                    g_s.frames_until_watch_check = WATCH_CHECK_INTERVAL;
+                    g_s.watch_rewrites = 0;
+                }
                 clear_pending();
             } else if (rs == LoadResult::Failed && ++g_s.failures >= MAX_FAILURES) {
                 OPENDOJO_LOG(

@@ -119,6 +119,7 @@ add_library(opendojo SHARED
     src/players.cpp
     src/practice_state.cpp
     src/render_hook.cpp
+    src/signatures.cpp
     src/slot.cpp
     src/subsystems.cpp
     src/theme.cpp

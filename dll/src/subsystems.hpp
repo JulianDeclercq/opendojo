@@ -6,9 +6,9 @@
 //
 // Polaris stores most gameplay subsystems behind a service-locator hash
 // map (FUN_1418db8f0). The map lives at *(polaris + CTX_PTR_OFFSET) + 0x10,
-// and entries are keyed by a 4-byte hash. The hash for each subsystem is
-// itself stored at a known module offset (KEY_*). To resolve a subsystem
-// we read the key, look it up in the map, and return the bound pointer.
+// and entries are keyed by a 4-byte hash. Each KEY_* below is the actual
+// hash value (a string-hash of the subsystem's class name) — these are
+// stable across Tekken patches because the class names don't change.
 //
 // pool1 / pool2 are the recording-buffer pools holding the slot data.
 // They're allocated lazily on first practice-mode recording — until then,
@@ -16,41 +16,57 @@
 
 namespace opendojo::subsystems {
 
-// Pointer-storage offsets within Polaris's image.
+// Service-locator context pointer offset in Polaris's image.
+// TODO: migrate to AOB-from-xref. Currently the only data offset that's
+// still hardcoded — every other slot we touch (POOL1/POOL2, the practice
+// singleton slot) is resolved by signatures::*_addr() from a code xref.
+// CTX needs its own anchor function; the existing AOB-resolved functions
+// don't reference it.
 inline constexpr std::uintptr_t CTX_PTR_OFFSET = 0x9537300;
-inline constexpr std::uintptr_t POOL1_PTR_OFFSET = 0x986AC70;
-inline constexpr std::uintptr_t POOL2_PTR_OFFSET = 0x986AC78;
 
-// Subsystem key offsets — each names a 4-byte hash key for the locator.
-// Comments are best-guess based on bisects + Ghidra; precise semantics
-// unconfirmed for most fields.
-inline constexpr std::uintptr_t KEY_GAMEPLAY =
-    0x9537314;  // practice gameplay state: per-slot recorded flags at +0x480, human-side index at +0x47C
-inline constexpr std::uintptr_t KEY_SINGLETON =
-    0x95371B0;  // top-level recording session config: side-gate +0x002, "session exists" bit 22 of word0
-inline constexpr std::uintptr_t KEY_RECORDING =
-    0x95371A4;  // recording subsystem; `this` arg pool_init expects
-inline constexpr std::uintptr_t KEY_PLAYERS_SUB =
-    0x9537078;  // per-side Player* array natural finalize uses; not always resolved in our context
-inline constexpr std::uintptr_t KEY_RECORDPOOL =
-    0x9537308;  // TArray of per-CPU-side 0x140-byte objects; holds move-list slot payloads.
-                // Resolve via lookup(), then element[cpu_side] (each elem is 0x140 B), then
-                // (slot+1)*8*4 byte rows of 8 uint32 channels at +0x44.
-inline constexpr std::uintptr_t KEY_SUBB =
-    0x953707C;  // playback-session-armed flag at +0x065; writing 0 mid-intro freezes input
-inline constexpr std::uintptr_t KEY_SUBC =
-    0x9537080;  // global recording-state counter at +0x25C: -1 == none, 1 == ≥1 slot recorded; game writes -1 at end of round-start setup pass
-inline constexpr std::uintptr_t KEY_SUBD = 0x9537084;  // purpose unknown
+// Subsystem hash keys. These were previously offsets into .data that held
+// the actual hash; now we use the hash values directly so we don't depend
+// on the .data slot location. Comments are best-guess based on bisects +
+// Ghidra; precise semantics unconfirmed for most fields.
+//
+// Dumped from Polaris-Win64-Shipping.exe v3.00.02 — confirm via the
+// /dump command (logs each subsystem's resolved address). If lookup
+// suddenly fails on a new patch, the class name likely changed.
+inline constexpr std::uint32_t KEY_GAMEPLAY = 0x2CD822B4;
+// practice gameplay state: per-slot recorded flags at +0x480, human-side index at +0x47C
 
-// Walk the service-locator hash map and return the bound pointer for
-// the subsystem whose key lives at module+key_offset. Returns 0 if the
-// upstream context isn't initialized yet, or if the key isn't found.
+inline constexpr std::uint32_t KEY_SINGLETON = 0xBC5F2597;
+// top-level recording session config: side-gate +0x002, "session exists" bit 22 of word0
+
+inline constexpr std::uint32_t KEY_RECORDING = 0x3BCD6F67;
+// recording subsystem; `this` arg pool_init expects
+
+inline constexpr std::uint32_t KEY_PLAYERS_SUB = 0xC7ECD634;
+// per-side Player* array natural finalize uses; not always resolved in our context
+
+inline constexpr std::uint32_t KEY_RECORDPOOL = 0xA7A8857B;
+// TArray of per-CPU-side 0x140-byte objects; holds move-list slot payloads.
+// Resolve via lookup(), then element[cpu_side] (each elem is 0x140 B), then
+// (slot+1)*8*4 byte rows of 8 uint32 channels at +0x44.
+
+inline constexpr std::uint32_t KEY_SUBB = 0xEDFEC9B0;
+// playback-session-armed flag at +0x065; writing 0 mid-intro freezes input
+
+inline constexpr std::uint32_t KEY_SUBC = 0x472D4C0B;
+// global recording-state counter at +0x25C: -1 == none, 1 == ≥1 slot recorded;
+// game writes -1 at end of round-start setup pass
+
+inline constexpr std::uint32_t KEY_SUBD = 0x52EE9A9E;  // purpose unknown
+
+// Walk the service-locator hash map and return the bound pointer for the
+// subsystem keyed by `hash`. Returns 0 if the upstream context isn't
+// initialized yet, or if the key isn't found.
 //
 // IMPORTANT: subsystem addresses are NOT stable. They get reinstantiated
 // at every scene transition (character select, match load, return-to-menu)
 // and clear to 0 when the user exits practice mode. Always re-resolve at
 // the point of use — never cache the returned pointer across calls.
-std::uintptr_t lookup(std::uintptr_t key_offset);
+std::uintptr_t lookup(std::uint32_t hash);
 
 // Fast "are we currently in practice mode?" check. Used as the per-frame
 // gate for everything OpenDojo runs — menu render, gamepad poll, autosave

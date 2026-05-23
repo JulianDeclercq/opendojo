@@ -7,14 +7,17 @@
 #include "log.hpp"
 #include "memory.hpp"
 #include "players.hpp"
+#include "signatures.hpp"
 
 namespace opendojo::player_hook {
 
 namespace {
 
-// Refresh-players function — the actual one Tekken calls on practice
-// entry and on CPU character change. Identified via DR0 watch on
-// holder+0x30 (writing instruction at RVA 0x5E70D5A inside this fn).
+// Refresh-players function — historically at RVA 0x5E70CD0 in v3.00.02,
+// now resolved via AOB scan (see signatures.cpp). This is the function
+// Tekken calls on practice entry and on CPU character change.
+// Identified via DR0 watch on holder+0x30 (the write instruction lives
+// ~0x8A bytes into this fn).
 //
 // Note: Ghidra has an analyzed function at 0x5E70B40 that *looks*
 // like this one (same service-locator + same write to RBX+0x30),
@@ -22,7 +25,6 @@ namespace {
 // nothing — it doesn't fire in the practice flow we care about.
 // The unanalyzed function here (Ghidra never created the symbol)
 // is the live one.
-constexpr std::uintptr_t REFRESH_RVA = 0x5E70CD0;
 
 std::atomic<bool> g_installed{false};
 std::atomic<bool> g_detected{false};
@@ -82,9 +84,10 @@ void install() {
     bool expected = false;
     if (!g_installed.compare_exchange_strong(expected, true)) return;
 
-    auto base = memory::polaris_base();
-    if (!base) {
-        OPENDOJO_LOG("player_hook: polaris base unresolved");
+    auto refresh_addr = signatures::player_refresh();
+    if (!refresh_addr) {
+        OPENDOJO_LOG(
+            "player_hook: player_refresh signature unresolved — character-switch detect OFF");
         g_installed.store(false);
         return;
     }
@@ -98,7 +101,7 @@ void install() {
         return;
     }
 
-    auto target = reinterpret_cast<void*>(base + REFRESH_RVA);
+    auto target = reinterpret_cast<void*>(refresh_addr);
     if (MH_CreateHook(target, reinterpret_cast<void*>(&refresh_detour),
                       reinterpret_cast<void**>(&g_orig)) != MH_OK) {
         OPENDOJO_LOG("player_hook: MH_CreateHook failed");

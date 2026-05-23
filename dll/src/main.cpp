@@ -24,6 +24,7 @@
 #include "practice_state.hpp"
 #include "proxy.hpp"
 #include "render_hook.hpp"
+#include "signatures.hpp"
 #include "subsystems.hpp"
 
 namespace {
@@ -39,6 +40,16 @@ void init_thread() {
         return;
     }
     OPENDOJO_LOG("polaris_base = 0x%llX", static_cast<unsigned long long>(base));
+
+    // Resolve every patched function via AOB scan so we survive Tekken
+    // patches that shift RVAs. Each hook below queries signatures::
+    // for its target and silently no-ops if the scan failed.
+    if (!opendojo::signatures::resolve_all()) {
+        OPENDOJO_LOG(
+            "WARNING: one or more signatures didn't resolve — affected features "
+            "(autosave / character-switch detect / drill auto-allocate) will no-op. "
+            "Tekken likely patched. Update signatures.cpp.");
+    }
 
     // pool1 is lazy — null until the user records once per game launch.
     auto p1 = opendojo::subsystems::pool1();

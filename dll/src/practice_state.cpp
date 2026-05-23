@@ -10,29 +10,32 @@
 #include "log.hpp"
 #include "memory.hpp"
 #include "player_hook.hpp"
+#include "signatures.hpp"
 
 namespace opendojo::practice_state {
 
 namespace {
 
-// PRACTICE-specific controller slot at module-base + 0x9B792A8.
-// Created by FUN_145CA38A0 (alloc + ctor at FUN_145C8AFF0) only on
-// Practice/Training/Replay entry — identified by xref to the string
-// `TEXT_000_UI_PRACTICE_193`. This is what we gate the menu on so the
-// menu only opens in practice and NOT in vs / online / story.
+// PRACTICE-specific controller slot — historically at module-base +
+// 0x9B792A8, now resolved via signatures::practice_slot_addr() (xref
+// from the dtor's slot-clear instruction). Created by FUN_145CA38A0
+// (alloc + ctor at FUN_145C8AFF0) only on Practice/Training/Replay
+// entry — identified by xref to the string `TEXT_000_UI_PRACTICE_193`.
+// This is what we gate the menu on so the menu only opens in practice
+// and NOT in vs / online / story.
 //
 // Previously this constant pointed at +0x9B79290, but that slot turned
 // out to be the generic *battle/round* controller (created for any
 // match: vs, story, practice, …) — which explained why the menu still
 // opened in vs/story matches. The two slots live 8 bytes apart in the
 // same data cluster, easy to confuse.
-constexpr std::uintptr_t PRACTICE_SLOT_OFFSET = 0x9B792A8;
 
-// Practice-controller scalar-deleting destructor at RVA 0x05C8C880.
+// Practice-controller scalar-deleting destructor — historically at RVA
+// 0x05C8C880 in v3.00.02, now resolved via AOB scan (see signatures.cpp).
 // Identified via vtable slot 0 of PTR_LAB_148550eb0 (the practice
 // controller's vtable, written by FUN_145C8AFF0). The slot write to
-// 0x149B792A8 lives at 0x145C8C939 — 0xB9 bytes into this function
-// body, exactly the MSVC scalar-deleting-dtor pattern.
+// 0x149B792A8 lives ~0xB9 bytes into this function body, exactly the
+// MSVC scalar-deleting-dtor pattern.
 //
 // We hook this (instead of the battle/round dtor at FUN_145C8C2F0)
 // because:
@@ -42,7 +45,6 @@ constexpr std::uintptr_t PRACTICE_SLOT_OFFSET = 0x9B792A8;
 //      (which tears down and rebuilds the battle controller). Running
 //      flush_now there crashed the game — gameplay subsystems were
 //      mid-teardown when save_for tried to read slot data.
-constexpr std::uintptr_t DTOR_RVA = 0x05C8C880;
 
 std::atomic<bool> g_installed{false};
 // Last observed slot state — drives the 0→nonzero transition that
@@ -56,9 +58,9 @@ void* dtor_hook(void* this_ptr, unsigned flags) {
     // The dtor function symbol is shared by all instances of this
     // class. We only care about the singleton — confirm by reading
     // the practice slot and matching `this`.
-    auto base = opendojo::memory::polaris_base();
-    if (base && this_ptr) {
-        auto singleton = opendojo::memory::read_u64(base + PRACTICE_SLOT_OFFSET);
+    auto slot = signatures::practice_slot_addr();
+    if (slot && this_ptr) {
+        auto singleton = opendojo::memory::read_u64(slot);
         if (singleton == reinterpret_cast<std::uintptr_t>(this_ptr)) {
             OPENDOJO_LOG("practice_state: dtor (this=0x%p) — flushing autosave", this_ptr);
             // CRITICAL: save BEFORE forwarding to the original dtor.
@@ -86,9 +88,9 @@ bool install_one(void* target, void* shim, void** orig, const char* label) {
 }  // namespace
 
 bool is_active() {
-    auto base = opendojo::memory::polaris_base();
-    if (!base) return false;
-    bool active = opendojo::memory::read_u64(base + PRACTICE_SLOT_OFFSET) != 0;
+    auto slot = signatures::practice_slot_addr();
+    if (!slot) return false;
+    bool active = opendojo::memory::read_u64(slot) != 0;
 
     // Detect 0→nonzero transition and notify autosave so it resets its
     // prev-character state for the new session. Using compare_exchange
@@ -116,9 +118,12 @@ void install_hooks() {
     bool expected = false;
     if (!g_installed.compare_exchange_strong(expected, true)) return;
 
-    auto base = memory::polaris_base();
-    if (!base) {
-        OPENDOJO_LOG("practice_state: polaris base unresolved — can't install hooks");
+    // signatures::practice_dtor() returns 0 if either polaris isn't loaded
+    // or the AOB scan didn't find the function — both surface as "no
+    // address" here, so we don't need a separate polaris_base check.
+    auto dtor_addr = signatures::practice_dtor();
+    if (!dtor_addr) {
+        OPENDOJO_LOG("practice_state: practice_dtor signature unresolved — autosave-on-exit OFF");
         return;
     }
 
@@ -130,7 +135,7 @@ void install_hooks() {
         return;
     }
 
-    auto dtor = reinterpret_cast<void*>(base + DTOR_RVA);
+    auto dtor = reinterpret_cast<void*>(dtor_addr);
     if (!install_one(dtor, reinterpret_cast<void*>(&dtor_hook),
                      reinterpret_cast<void**>(&g_dtor_orig), "dtor")) {
         return;
