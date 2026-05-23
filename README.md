@@ -1,16 +1,18 @@
 # OpenDojo
 
 Tekken 8 practice-mode tool. Save, share, and reload practice mode recordings
-recordings as portable drill files.
+recordings as portable drill files. 
 
 A drill is a byte-perfect copy of Tekken's in-engine practice recording. Once
 loaded, the game plays it back exactly as if you'd just finished recording it
-yourself.
+yourself. 
+
+I just wanted a way to download and load defense drills without needing to re-record them each time I loaded the game.
 
 ## Features
 
 - **Export** any combination of your 8 practice-mode recording slots to a
-  shareable `.drill` text file
+  shareable `.drill.txt` text file
 - **Import** drills back into your slots ("Add to empty slots" or
   "Replace all")
 - **Autosave per character**: opt in and your last recording is snapshotted
@@ -43,11 +45,7 @@ you save a drill. Your drills, autosaves, and config live there.
 ## Usage
 
 1. Launch Tekken 8 and start a practice match.
-2. **Record into a slot once.** Tekken allocates the recording buffer lazily,
-   so until you record once per game launch, OpenDojo has nothing to read or
-   write. After that one recording the menu shows "ready" and works for the
-   rest of the session.
-3. Press `F12` (or `Back + Y` on controller) to open the menu.
+2. Press `F12` (or `Back + Y` on controller) to open the menu.
 
 ### Tabs
 
@@ -58,7 +56,6 @@ you save a drill. Your drills, autosaves, and config live there.
 - **Export** — save the currently-occupied slots as a new drill file.
   Name + description are optional; CPU character and side are autodetected
   from the live match.
-- **Status** — ready state and per-recording event counts.
 - **Settings** — autosave toggle and key/controller rebinding.
 - **About** — version + current binds.
 
@@ -138,7 +135,8 @@ automatically before each build to keep the source tree formatted.
 
 
 ## Code
-ts hella vibe coded lol
+ts hella vibe coded lol, all the RE was done by claude with ghidra and cheatengine mcps.
 
-I just wanted a way to download and load defense drills without needing to re-record them each time I loaded the game. 
 Spent like 2 days trying to set up an in-game menu and got maybe 50% of the way there, but it's a ton of work so I'm giving up on that for now... I had claude write all findings to `/docs` in case there's any useful info for future modders.
+
+Please feel free to submit a pull request with features and fixes!
