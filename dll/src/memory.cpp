@@ -77,3 +77,33 @@ void opendojo::memory::write_bytes(std::uintptr_t addr, const void* src, std::si
     if (!addr || !src || !n) return;
     std::memcpy(reinterpret_cast<void*>(addr), src, n);
 }
+
+// --- SEH-guarded reads -----------------------------------------------------
+// __try/__except can't live in functions that have C++ objects with
+// destructors in scope, so these are kept as small leaf helpers operating
+// on POD only.
+
+namespace {
+template <typename T>
+bool try_read_at(std::uintptr_t addr, T* out) {
+    *out = T{};
+    if (!addr) return false;
+    __try {
+        std::memcpy(out, reinterpret_cast<const void*>(addr), sizeof(T));
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        *out = T{};
+        return false;
+    }
+}
+}  // namespace
+
+bool opendojo::memory::try_read_u64(std::uintptr_t addr, std::uint64_t* out) {
+    return try_read_at(addr, out);
+}
+bool opendojo::memory::try_read_u32(std::uintptr_t addr, std::uint32_t* out) {
+    return try_read_at(addr, out);
+}
+bool opendojo::memory::try_read_u8(std::uintptr_t addr, std::uint8_t* out) {
+    return try_read_at(addr, out);
+}

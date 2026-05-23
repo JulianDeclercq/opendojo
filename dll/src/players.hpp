@@ -59,4 +59,10 @@ bool round_active();
 // to write opponent state).
 std::uintptr_t cpu_player_address();
 
+// Heap address of the GlobalPlayerHolder, or 0 if the holder slot
+// hasn't been populated yet (out of match, or pre-load). Holder+0x30
+// and +0x38 are the P1 / P2 player pointer slots. Used by diag_hook
+// to install a one-shot hardware write-watch.
+std::uintptr_t holder_address();
+
 }  // namespace opendojo::players

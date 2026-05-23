@@ -13,6 +13,7 @@
 #include "drill.hpp"
 #include "log.hpp"
 #include "memory.hpp"
+#include "player_hook.hpp"
 #include "players.hpp"
 #include "slot.hpp"
 #include "subsystems.hpp"
@@ -52,13 +53,41 @@ struct State {
     // A small grace window keeps us live for a few frames after the
     // subsystem clears so the exit-from-practice save still fires.
     int frames_outside_practice = 9999;  // start firmly outside
+
+    // Periodic-save counter. Ticks while in practice; when it passes
+    // PERIODIC_SAVE_FRAMES we re-snapshot the current character. This
+    // is the safety net for the case where the user exits practice
+    // without changing characters — at exit the gameplay subsystem may
+    // already be cleared so save_for can't read slots, but a periodic
+    // save from a few seconds prior captured the data.
+    int frames_since_periodic_save = 0;
+
+    // One-shot "this is a fresh practice entry" flag. Set by
+    // on_practice_entered (the practice-slot 0→nonzero hook), cleared
+    // after we successfully queue an autoload. Currently kept around
+    // for set_enabled semantics but no longer load-bearing for the
+    // tick-side gate.
+    bool autoload_armed = false;
+
+    // Frames since the current pending_load was queued. We always
+    // wait at least MIN_WAIT_AFTER_QUEUE frames before processing,
+    // regardless of round_active. Reason: on an intra-practice
+    // character switch, round_active reads stale-true immediately
+    // (new player struct's frames_since_round_start is already
+    // non-zero — Tekken seems to seed it rather than zero it). Writing
+    // the slot flags before Tekken's switch-init completes gets the
+    // flags stomped, leaving the menu showing Empty even though the
+    // drill loaded successfully into the pool.
+    int frames_since_queue = 0;
 };
 State g_s;
 
-constexpr int MAX_FAILURES = 3;              // give up after this many load_drill !ok
-constexpr int RETRY_INTERVAL = 60;           // poll once per second between retries
-constexpr int EXIT_GRACE_FRAMES = 5;         // keep ticking briefly after leaving practice
-constexpr int MAX_ROUND_WAIT_FRAMES = 1800;  // 30s safety timeout if round-active never fires
+constexpr int MAX_FAILURES = 3;                // give up after this many load_drill !ok
+constexpr int RETRY_INTERVAL = 60;             // poll once per second between retries
+constexpr int EXIT_GRACE_FRAMES = 5;           // keep ticking briefly after leaving practice
+constexpr int MAX_ROUND_WAIT_FRAMES = 1800;    // 30s safety timeout if round-active never fires
+constexpr int MIN_WAIT_AFTER_QUEUE = 60;       // 1s minimum settle window before processing load
+constexpr int PERIODIC_SAVE_FRAMES = 30 * 60;  // re-snapshot every 30s of practice
 
 std::filesystem::path autosave_path(std::string_view character) {
     // Character names are pure ASCII (lowercase a-z + digits + underscore)
@@ -104,8 +133,7 @@ void ensure_initialized() {
 // Snapshot every populated slot into a Drill and write it to disk.
 // Returns false only on a real I/O / encode error. Always overwrites
 // the existing autosave file for this character. If no slots are
-// populated, the file is *deleted* — the autosave should always
-// reflect current state, not stale data.
+// populated, the file is left untouched (see comment below).
 bool save_for(std::string_view character) {
     auto path = autosave_path(character);
 
@@ -114,10 +142,12 @@ bool save_for(std::string_view character) {
         if (slot::is_populated(i)) ++populated_slots;
     }
     if (populated_slots == 0) {
-        std::error_code ec;
-        std::filesystem::remove(path, ec);  // no-op if file isn't there
-        OPENDOJO_LOG("autosave: %s has no recordings — cleared autosave file",
-                     std::string(character).c_str());
+        // Don't touch the file — preserve whatever was last saved. The
+        // most common "0 populated" case is the leave-practice transition
+        // where the gameplay subsystem has already cleared and we can't
+        // read slot state anymore. Wiping the file there would erase the
+        // user's session. (Manually clearing an autosave is a UI action
+        // we can add later if needed.)
         return true;
     }
 
@@ -204,6 +234,7 @@ void clear_pending() {
     g_s.failures = 0;
     g_s.frames_until_retry = 0;
     g_s.round_wait_frames = 0;
+    g_s.frames_since_queue = 0;
 }
 
 }  // anonymous namespace
@@ -225,11 +256,19 @@ void set_enabled(bool on) {
 
     // Treat the toggle as a reset point: snapshot current state into
     // prev_* so we don't immediately fire a transition save/load on the
-    // next tick.
-    auto cpu = players::detect_cpu();
-    g_s.prev_detected = cpu.detected;
-    g_s.prev_character_id = cpu.character_id;
-    g_s.prev_character_name = cpu.character_name;
+    // next tick. Don't arm autoload here — toggling on mid-practice
+    // hits the same unsafe write path as an intra-practice character
+    // switch. The user can manually load from the menu.
+    auto cached = player_hook::current_cpu();
+    g_s.prev_detected = cached.detected;
+    g_s.prev_character_id = cached.cpu_character_id;
+    if (cached.detected) {
+        auto n = players::character_name(cached.cpu_character_id);
+        g_s.prev_character_name = n ? n : "";
+    } else {
+        g_s.prev_character_name.clear();
+    }
+    g_s.autoload_armed = false;
     clear_pending();
 }
 
@@ -237,20 +276,41 @@ void flush_now() {
     ensure_initialized();
     if (!g_s.enabled) return;
     // Use the latest tracked character. prev_* is updated each tick to
-    // reflect whatever's live, so even at WM_CLOSE time this points at
-    // the character we were just practicing against.
+    // reflect whatever's live. The practice-controller dtor hook calls
+    // this BEFORE the controller tears down so all gameplay subsystems
+    // are still readable.
     if (!g_s.prev_detected) return;
     if (g_s.prev_character_name.empty()) return;
     OPENDOJO_LOG("autosave: flush_now for %s", g_s.prev_character_name.c_str());
     save_for(g_s.prev_character_name);
 }
 
+void on_practice_entered() {
+    ensure_initialized();
+    if (!g_s.enabled) return;
+    OPENDOJO_LOG("autosave: practice entered — autoload will fire when round is ready");
+    // Clear prev-tick state so the next tick treats the upcoming
+    // character as a fresh detection and queues an autoload via the
+    // normal change-detection path.
+    g_s.prev_detected = false;
+    g_s.prev_character_id = 0;
+    g_s.prev_character_name.clear();
+    clear_pending();
+    g_s.frames_since_periodic_save = 0;
+    // Arm autoload for exactly this practice entry. The tick-side gate
+    // consumes the flag the first time it queues a load.
+    g_s.autoload_armed = true;
+}
+
 void tick() {
     ensure_initialized();
     if (!g_s.enabled) return;
 
-    // Practice-mode gate with exit grace.
-    const bool in_practice = subsystems::lookup(subsystems::KEY_GAMEPLAY) != 0;
+    // Practice-mode gate (matches subsystems::in_practice — the
+    // GlobalPlayerHolder chain, not the gameplay-subsystem hash) with an
+    // exit grace so we still observe the leave-practice transition for a
+    // few frames after it fires.
+    const bool in_practice = subsystems::in_practice();
     if (in_practice) {
         g_s.frames_outside_practice = 0;
     } else {
@@ -258,34 +318,78 @@ void tick() {
     }
     if (g_s.frames_outside_practice > EXIT_GRACE_FRAMES) return;
 
-    auto cpu = players::detect_cpu();
+    // Initial-load fallback: FUN_145E70B40 (the function our detour
+    // hooks) doesn't fire on the very first player population — only
+    // on subsequent refreshes. So during the brief window between
+    // "practice slot non-zero" and "first character refresh", the
+    // cache stays detected=false. ensure_fresh() walks the chain
+    // once during that window to prime the cache; once detected,
+    // it's a single atomic load and the detour takes over.
+    player_hook::ensure_fresh();
+
+    // Read the cache populated by player_hook (the MinHook detour on
+    // Tekken's "refresh player pointers" function). This replaces the
+    // previous per-tick players::detect_cpu chain walk — that walk
+    // dereferenced GlobalPlayerHolder which transiently points at
+    // freed memory during a character swap, causing AVs that took
+    // the game down. The cache is updated synchronously inside the
+    // detour, so it always reflects the post-refresh state.
+    auto cached = player_hook::current_cpu();
+    const char* cached_name = cached.detected ? players::character_name(cached.cpu_character_id)
+                                              : nullptr;
 
     // Change detection: cheap uint32 compare. The matching name is only
-    // refreshed below when this flag is true, so the no-change steady
+    // looked up below when this flag is true, so the no-change steady
     // state allocates nothing.
-    const bool changed = cpu.detected != g_s.prev_detected ||
-                         (cpu.detected && cpu.character_id != g_s.prev_character_id);
+    const bool changed = cached.detected != g_s.prev_detected ||
+                         (cached.detected && cached.cpu_character_id != g_s.prev_character_id);
 
     // Save the OLD state when we leave practice or switch character.
     if (changed && g_s.prev_detected) { save_for(g_s.prev_character_name); }
 
-    // Queue a load when we enter practice or switch to a new character.
-    // We hold ALL writes (pool init, slot writes, session-loaded flag
-    // commit) behind a single round-active gate. Writing
-    // set_recorded_flag's singleton/subB/subC fields during the round
-    // intro looks like "playback armed, awaiting trigger" to the game
-    // and locks character input until the user manually re-evaluates
-    // state (pause menu open, Select+A round reset).
-    if (changed && cpu.detected) {
-        g_s.pending_load = cpu.character_name;
+    // Periodic safety-net save while in practice. The exit-practice save
+    // above can miss data if the gameplay subsystem clears before we get
+    // to read slots; with periodic save, the file already reflects a
+    // recent snapshot, so at worst we lose the last PERIODIC_SAVE_FRAMES
+    // / 60 ≈ 30 seconds of mid-practice work.
+    if (cached.detected) {
+        ++g_s.frames_since_periodic_save;
+        if (g_s.frames_since_periodic_save >= PERIODIC_SAVE_FRAMES) {
+            if (cached_name) save_for(cached_name);
+            g_s.frames_since_periodic_save = 0;
+        }
+    } else {
+        // Reset so re-entering practice doesn't immediately fire.
+        g_s.frames_since_periodic_save = 0;
+    }
+
+    // Queue an autoload on EVERY change-to-detected event (initial
+    // practice entry OR intra-practice character switch). The
+    // round_active gate downstream prevents writing into subsystem
+    // state during the round-intro window — and with player_hook
+    // driving the cache, the cache only flips AFTER Tekken's
+    // FUN_145E70B40 has updated holder.p1/p2 to the NEW player, so
+    // round_active() reads a stable frames_since_round_start = 0
+    // and waits for the new round to actually start. (Previously
+    // this was gated on a fresh-entry flag because the per-tick
+    // detect_cpu chain walk read stale data mid-swap and round_active
+    // returned true immediately — leading to writes during the
+    // transition and a delayed crash. The chain walk is gone now.)
+    if (changed && cached.detected && cached_name) {
+        g_s.autoload_armed = false;  // consume; harmless if not set
+        g_s.pending_load = cached_name;
         g_s.failures = 0;
         g_s.frames_until_retry = 0;
         g_s.round_wait_frames = 0;
+        g_s.frames_since_queue = 0;
     }
 
     // Pending load processing — gated on round-active for the reason above.
     if (!g_s.pending_load.empty()) {
-        if (!players::round_active()) {
+        ++g_s.frames_since_queue;
+        const bool min_wait_done = g_s.frames_since_queue >= MIN_WAIT_AFTER_QUEUE;
+
+        if (!min_wait_done || !players::round_active()) {
             ++g_s.round_wait_frames;
             if (g_s.round_wait_frames > MAX_ROUND_WAIT_FRAMES) {
                 OPENDOJO_LOG(
@@ -326,9 +430,9 @@ void tick() {
 
     // Only refresh prev_character_name on actual change — saves the per-
     // frame string assignment when the character hasn't moved.
-    if (changed) { g_s.prev_character_name = cpu.character_name; }
-    g_s.prev_character_id = cpu.character_id;
-    g_s.prev_detected = cpu.detected;
+    if (changed) { g_s.prev_character_name = cached_name ? cached_name : ""; }
+    g_s.prev_character_id = cached.cpu_character_id;
+    g_s.prev_detected = cached.detected;
 }
 
 }  // namespace opendojo::autosave

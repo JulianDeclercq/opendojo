@@ -294,27 +294,33 @@ CpuInfo detect_cpu() {
     CpuInfo c;
     if (!ensure_resolved()) return c;
 
-    auto holder = memory::read_u64(g_resolved.holder_global_slot);
-    if (!holder) return c;  // not in a match
+    // All chain reads are SEH-guarded — during an intra-practice
+    // character swap the GlobalPlayerHolder chain transiently points
+    // at freed memory. A plain dereference would AV in our render
+    // thread and crash the game. Any failed read terminates the walk
+    // and we return "not detected" for the tick.
+    std::uint64_t holder = 0, p1 = 0, p2 = 0, lvl1 = 0, lvl2 = 0, lvl3 = 0, info = 0;
+    if (!memory::try_read_u64(g_resolved.holder_global_slot, &holder) || !holder) return c;
+    if (!memory::try_read_u64(holder + HOLDER_P1, &p1) || !p1) return c;
+    if (!memory::try_read_u64(holder + HOLDER_P2, &p2) || !p2) return c;
 
-    auto p1 = memory::read_u64(holder + HOLDER_P1);
-    auto p2 = memory::read_u64(holder + HOLDER_P2);
-    if (!p1 || !p2) return c;
+    // Walk the info chain: deref, deref, +0x20, deref. The final +0x0
+    // in Irony's trail is a no-op so we stop at the third dereference.
+    if (!memory::try_read_u64(g_resolved.info_global_slot, &lvl1) || !lvl1) return c;
+    if (!memory::try_read_u64(lvl1 + INFO_STEP_2, &lvl2) || !lvl2) return c;
+    if (!memory::try_read_u64(lvl2 + INFO_STEP_3, &lvl3) || !lvl3) return c;
+    if (!memory::try_read_u64(lvl3 + INFO_STEP_4, &info) || !info) return c;
 
-    // Walk the info chain: deref, deref, +0x20, deref. The final +0x0 in
-    // Irony's trail is a no-op so we stop at the third dereference.
-    auto lvl1 = memory::read_u64(g_resolved.info_global_slot);
-    auto lvl2 = lvl1 ? memory::read_u64(lvl1 + INFO_STEP_2) : 0;
-    auto lvl3 = lvl2 ? memory::read_u64(lvl2 + INFO_STEP_3) : 0;
-    auto info = lvl3 ? memory::read_u64(lvl3 + INFO_STEP_4) : 0;
-    if (!info) return c;
-
-    auto human_player_id = memory::read_u8(info + OFF_PLAYER_ID);
+    std::uint8_t human_player_id = 0;
+    if (!memory::try_read_u8(info + OFF_PLAYER_ID, &human_player_id)) return c;
     const bool human_is_p1 = (human_player_id == 0);
 
     auto cpu_ptr = human_is_p1 ? p2 : p1;
+    std::uint32_t cid = 0;
+    if (!memory::try_read_u32(cpu_ptr + OFF_CHARACTER_ID, &cid)) return c;
+
     c.cpu_side = human_is_p1 ? Side::p2 : Side::p1;
-    c.character_id = memory::read_u32(cpu_ptr + OFF_CHARACTER_ID);
+    c.character_id = cid;
     if (auto name = character_name_internal(c.character_id)) {
         c.character_name = name;
     } else {
@@ -328,32 +334,37 @@ CpuInfo detect_cpu() {
 
 bool round_active() {
     if (!ensure_resolved()) return false;
-    auto holder = memory::read_u64(g_resolved.holder_global_slot);
-    if (!holder) return false;
-    auto p1 = memory::read_u64(holder + HOLDER_P1);
-    if (!p1) return false;
+    std::uint64_t holder = 0, p1 = 0;
+    if (!memory::try_read_u64(g_resolved.holder_global_slot, &holder) || !holder) return false;
+    if (!memory::try_read_u64(holder + HOLDER_P1, &p1) || !p1) return false;
     // T8 Player+0x15C0 = frames_since_round_start (Irony types.zig).
     // 0 during intro / before FIGHT; ticks up once the round is live
     // and character input is being processed.
-    auto frames = memory::read_u32(p1 + 0x15C0);
+    std::uint32_t frames = 0;
+    if (!memory::try_read_u32(p1 + 0x15C0, &frames)) return false;
     return frames >= 1;
+}
+
+std::uintptr_t holder_address() {
+    if (!ensure_resolved()) return 0;
+    std::uint64_t holder = 0;
+    if (!memory::try_read_u64(g_resolved.holder_global_slot, &holder)) return 0;
+    return holder;
 }
 
 std::uintptr_t cpu_player_address() {
     if (!ensure_resolved()) return 0;
-    auto holder = memory::read_u64(g_resolved.holder_global_slot);
-    if (!holder) return 0;
-    auto p1 = memory::read_u64(holder + HOLDER_P1);
-    auto p2 = memory::read_u64(holder + HOLDER_P2);
-    if (!p1 || !p2) return 0;
+    std::uint64_t holder = 0, p1 = 0, p2 = 0, lvl1 = 0, lvl2 = 0, lvl3 = 0, info = 0;
+    if (!memory::try_read_u64(g_resolved.holder_global_slot, &holder) || !holder) return 0;
+    if (!memory::try_read_u64(holder + HOLDER_P1, &p1) || !p1) return 0;
+    if (!memory::try_read_u64(holder + HOLDER_P2, &p2) || !p2) return 0;
+    if (!memory::try_read_u64(g_resolved.info_global_slot, &lvl1) || !lvl1) return 0;
+    if (!memory::try_read_u64(lvl1 + INFO_STEP_2, &lvl2) || !lvl2) return 0;
+    if (!memory::try_read_u64(lvl2 + INFO_STEP_3, &lvl3) || !lvl3) return 0;
+    if (!memory::try_read_u64(lvl3 + INFO_STEP_4, &info) || !info) return 0;
 
-    auto lvl1 = memory::read_u64(g_resolved.info_global_slot);
-    auto lvl2 = lvl1 ? memory::read_u64(lvl1 + INFO_STEP_2) : 0;
-    auto lvl3 = lvl2 ? memory::read_u64(lvl2 + INFO_STEP_3) : 0;
-    auto info = lvl3 ? memory::read_u64(lvl3 + INFO_STEP_4) : 0;
-    if (!info) return 0;
-
-    auto human_player_id = memory::read_u8(info + OFF_PLAYER_ID);
+    std::uint8_t human_player_id = 0;
+    if (!memory::try_read_u8(info + OFF_PLAYER_ID, &human_player_id)) return 0;
     return (human_player_id == 0) ? p2 : p1;
 }
 

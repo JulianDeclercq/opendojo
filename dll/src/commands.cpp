@@ -190,8 +190,14 @@ LoadResult load_drill(const std::filesystem::path& path, LoadMode mode) {
         }
     }
     if (needs_pool1 && !opendojo::subsystems::pool1()) {
-        r.message = "not ready - record once in practice mode first";
-        return r;
+        // Pool isn't allocated yet — first practice load of this
+        // process, user hasn't recorded anything. Force-allocate it
+        // via the same path the game would use on its first record.
+        opendojo::subsystems::ensure_pool_allocated();
+        if (!opendojo::subsystems::pool1()) {
+            r.message = "not ready - enter practice mode first";
+            return r;
+        }
     }
 
     if (d.recordings.size() > opendojo::slot::USER_SLOTS) {

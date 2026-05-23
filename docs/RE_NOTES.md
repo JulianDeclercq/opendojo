@@ -534,3 +534,15 @@ Tooling notes (durable):
 - x64dbg: enable, but disable "TLS callbacks" in Events to stop the game pausing on every module load. Software BPs are safe in Tekken (HW data BPs crash — see existing memory note).
 - CE MCP bridge: install once; alive across CE restarts. Re-attach to game via `open_process` (param name is `process_id_or_name`, not `pid`).
 - When game crashes and is relaunched: PID changes; CE stays attached to old PID and silently fails. Re-attach to new PID before doing more work.
+
+----
+
+Practice-mode lifecycle (used by opendojo::practice_state to replace per-tick polling):
+
+- Practice-controller singleton slot: module+0x9B79290. Pointer-sized.
+- Allocation path (single per session entry): FUN_145CA3870 (RVA 0x05CA3870). Allocates 0xD0 bytes, calls FUN_145C8A5E0 ctor which writes the singleton slot. All gated callers (e.g. FUN_145C5FC40 game-state machine, FUN_145CB8CD3 et al.) check FUN_145C93300() == 0 first, so the factory fires exactly once per practice entry.
+- Destruction path (single per session exit): FUN_145C8C2F0 (RVA 0x05C8C2F0). Not auto-analyzed by Ghidra, but identifiable from layout: starts immediately after FUN_145C8C290's RET, contains a write `MOV [DAT_149B79290], 0` at 0x145C8C349, references the derived vtable at 0x1485508A0 (the one installed by ctor at 0x145C8A602). The dtor is the only writer of the singleton slot besides the ctor.
+- Adjacent dtors share the same prologue (`MOV [RSP+8],RBX; MOV [RSP+10],RSI; PUSH RDI; SUB RSP,0x20` = 14 bytes), so MinHook can patch the prologue safely.
+- Signature: `void* __fastcall ~PracticeController(void* this, unsigned flags)` — standard MSVC scalar-deleting dtor. `flags & 1` triggers operator delete with size 0xD0.
+- Hook at entry to read live gameplay state BEFORE the dtor tears down sub-objects (sub-fields at +0xA0 and +0x98 are released early in the dtor body).
+- The same dtor symbol could in principle be reused for non-singleton instances, so the hook filters: only fire when `this == *(void**)(module+0x9B79290)`.

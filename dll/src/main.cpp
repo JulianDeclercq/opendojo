@@ -20,6 +20,8 @@
 #include "config.hpp"
 #include "log.hpp"
 #include "memory.hpp"
+#include "player_hook.hpp"
+#include "practice_state.hpp"
 #include "proxy.hpp"
 #include "render_hook.hpp"
 #include "subsystems.hpp"
@@ -48,6 +50,17 @@ void init_thread() {
     opendojo::config::load();
 
     opendojo::render_hook::install();
+
+    // Practice-mode lifecycle hooks. Replaces what was previously a
+    // per-frame "are we in practice?" subsystem lookup with two
+    // event-driven hooks (controller ctor + dtor). See practice_state.hpp.
+    opendojo::practice_state::install_hooks();
+
+    // Player-pointer refresh hook. Replaces per-frame detect_cpu chain
+    // walks (which AV'd during character swaps) with an atomic cache
+    // updated synchronously when Tekken refreshes holder.p1/p2. See
+    // player_hook.hpp.
+    opendojo::player_hook::install();
 
     OPENDOJO_LOG("init thread done — press F12 in game to open menu");
 }

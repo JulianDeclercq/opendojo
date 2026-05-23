@@ -291,42 +291,87 @@ void draw_drills_tab() {
     ImGui::TextDisabled("Replace: clear all recordings, then load from the drill.");
 }
 
-void draw_export_tab() {
-    ImGui::TextDisabled("Save current recordings as a shareable drill file.");
-    ImGui::Spacing();
-
-    // We can export whenever the gameplay subsystem is reachable AND
-    // at least one slot is populated. Live recordings require pool1
-    // to be allocated, but move-list slots live in the recordpool (a
-    // different subsystem) and don't depend on pool1.
-    std::size_t populated = 0;
-    for (std::size_t i = 0; i < opendojo::slot::USER_SLOTS; ++i) {
-        if (opendojo::slot::is_populated(i)) ++populated;
-    }
-    if (populated == 0) {
-        ImGui::TextColored(
-            ImVec4(1, 0.7f, 0.3f, 1),
-            "No recordings to export. Record a move or select one from the move list first.");
-        return;
-    }
-    ImGui::Text("Recordings ready to export: %zu / %zu", populated, opendojo::slot::USER_SLOTS);
-
+void draw_recordings_tab() {
+    const bool in_practice = opendojo::subsystems::in_practice();
     auto cpu = opendojo::players::detect_cpu();
-    if (cpu.detected) {
-        ImGui::TextColored(ImVec4(0.55f, 0.95f, 0.65f, 1), "Detected: %s (CPU on %s)",
+
+    // Count populated slots up front so we can show "N/M recordings" on
+    // the right of the status row and only render populated entries in
+    // the table below.
+    std::size_t populated = 0;
+    if (in_practice) {
+        for (std::size_t i = 0; i < opendojo::slot::USER_SLOTS; ++i) {
+            if (opendojo::slot::is_populated(i)) ++populated;
+        }
+    }
+
+    // Status row: practice state + detected character on the left,
+    // "N/M recordings" right-aligned on the same line.
+    ImGui::TextUnformatted("Status:");
+    ImGui::SameLine();
+    if (!in_practice) {
+        ImGui::TextColored(ImVec4(1, 0.7f, 0.3f, 1), "not in practice mode");
+    } else if (cpu.detected) {
+        ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.5f, 1), "%s (CPU on %s)",
                            cpu.character_name.c_str(),
                            opendojo::players::side_to_string(cpu.cpu_side));
     } else {
-        ImGui::TextColored(ImVec4(1, 0.7f, 0.3f, 1),
-                           "Detected: not in a match (character/side will be \"unknown\")");
+        ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.5f, 1), "ready");
     }
+    {
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), "%zu/%zu recordings", populated,
+                      opendojo::slot::USER_SLOTS);
+        const float text_w = ImGui::CalcTextSize(buf).x;
+        ImGui::SameLine();
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - text_w);
+        ImGui::TextDisabled("%s", buf);
+    }
+
+    ImGui::Spacing();
+
+    if (!in_practice) {
+        ImGui::TextDisabled("Enter practice mode to record.");
+    } else if (populated == 0) {
+        ImGui::TextDisabled("No recordings yet. Record a move or pick one from the move list.");
+    } else {
+        const ImGuiTableFlags flags = ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                                      ImGuiTableFlags_SizingStretchProp;
+        if (ImGui::BeginTable("recordings", 3, flags)) {
+            ImGui::TableSetupColumn("Recording", ImGuiTableColumnFlags_WidthFixed, 140.0f);
+            ImGui::TableSetupColumn("Kind", ImGuiTableColumnFlags_WidthFixed, 120.0f);
+            ImGui::TableSetupColumn("Detail", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableHeadersRow();
+
+            for (std::size_t i = 0; i < opendojo::slot::USER_SLOTS; ++i) {
+                auto k = opendojo::slot::kind(i);
+                if (k == opendojo::slot::Kind::Empty) continue;
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                ImGui::Text("Recording %zu", i + 1);
+                ImGui::TableSetColumnIndex(1);
+                ImGui::TextUnformatted(opendojo::slot::kind_name(k));
+                ImGui::TableSetColumnIndex(2);
+                if (k == opendojo::slot::Kind::MoveList) {
+                    ImGui::TextUnformatted("saved");
+                } else {
+                    ImGui::Text("%u events", static_cast<unsigned>(opendojo::slot::event_count(i)));
+                }
+            }
+            ImGui::EndTable();
+        }
+    }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+    ImGui::TextColored(ImVec4(0.7f, 0.85f, 1.0f, 1), "Export");
     ImGui::Spacing();
 
     ImGui::PushItemWidth(420);
     ImGui::InputText("Name", g_state.export_name, sizeof(g_state.export_name));
     ImGui::InputText("Description", g_state.export_description, sizeof(g_state.export_description));
     ImGui::PopItemWidth();
-
     ImGui::TextDisabled("Leave name blank for timestamp.");
 
     ImGui::Spacing();
@@ -346,68 +391,9 @@ void draw_export_tab() {
         }
     }
     if (!can_export) ImGui::EndDisabled();
-}
-
-void draw_status_tab() {
-    // Practice-mode state is determined by the gameplay subsystem being
-    // reachable. pool1 only allocates after the first live recording —
-    // gating on it would hide existing movelist slots (which live in
-    // the recordpool subsystem and are independently allocated).
-    const bool in_practice = opendojo::subsystems::lookup(opendojo::subsystems::KEY_GAMEPLAY) != 0;
-
-    ImGui::Text("Status: ");
-    ImGui::SameLine();
-    if (in_practice) {
-        ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.5f, 1), "ready");
-    } else {
-        ImGui::TextColored(ImVec4(1, 0.7f, 0.3f, 1), "not in practice mode");
-    }
-
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
-
-    const ImGuiTableFlags flags = ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
-                                  ImGuiTableFlags_SizingStretchProp;
-    if (ImGui::BeginTable("recordings", 3, flags)) {
-        ImGui::TableSetupColumn("Recording", ImGuiTableColumnFlags_WidthFixed, 140.0f);
-        ImGui::TableSetupColumn("Kind", ImGuiTableColumnFlags_WidthFixed, 120.0f);
-        ImGui::TableSetupColumn("Detail", ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableHeadersRow();
-
-        for (std::size_t i = 0; i < opendojo::slot::USER_SLOTS; ++i) {
-            ImGui::TableNextRow();
-            ImGui::TableSetColumnIndex(0);
-            ImGui::Text("Recording %zu", i + 1);
-            ImGui::TableSetColumnIndex(1);
-            if (!in_practice) {
-                ImGui::TextDisabled("-");
-                ImGui::TableSetColumnIndex(2);
-                ImGui::TextDisabled("-");
-                continue;
-            }
-            auto k = opendojo::slot::kind(i);
-            if (k == opendojo::slot::Kind::Empty) {
-                ImGui::TextDisabled("empty");
-                ImGui::TableSetColumnIndex(2);
-                ImGui::TextDisabled("-");
-            } else {
-                ImGui::TextUnformatted(opendojo::slot::kind_name(k));
-                ImGui::TableSetColumnIndex(2);
-                if (k == opendojo::slot::Kind::MoveList) {
-                    ImGui::TextUnformatted("saved");
-                } else {
-                    ImGui::Text("%u events", static_cast<unsigned>(opendojo::slot::event_count(i)));
-                }
-            }
-        }
-        ImGui::EndTable();
-    }
-
-    ImGui::Spacing();
-    if (ImGui::Button("Dump slot flags to log")) {
-        opendojo::slot::dump_flag_state();
-        show_toast("Dumped slot flag state to opendojo.log");
+    if (!can_export) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("(record or pick a move first)");
     }
 }
 
@@ -467,86 +453,79 @@ void draw_settings_tab() {
     ImGui::Separator();
     ImGui::Spacing();
 
+    ImGui::TextColored(ImVec4(0.7f, 0.85f, 1.0f, 1), "Autosave");
+    ImGui::Spacing();
     {
         bool en = opendojo::autosave::is_enabled();
         if (ImGui::Checkbox("Autosave / autoload per character", &en)) {
             opendojo::autosave::set_enabled(en);
         }
-        ImGui::TextDisabled(
-            "Snapshots your current recordings per CPU character on every\n"
-            "character switch or practice exit. Reloads on return. The\n"
-            "autosave file always overwrites the previous one.");
     }
 
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
 
-    ImGui::TextUnformatted("Menu toggle key");
+    ImGui::TextColored(ImVec4(0.7f, 0.85f, 1.0f, 1), "Menu open binds");
     ImGui::Spacing();
 
     const auto vk = opendojo::config::toggle_vk();
-    ImGui::Text("Current binding: ");
-    ImGui::SameLine();
-    ImGui::TextColored(ImVec4(0.55f, 0.95f, 0.65f, 1), "%s", vk_name(vk).c_str());
-
-    ImGui::Spacing();
-
-    // Capture state owned by config.* / WndProc - we can't poll
-    // GetAsyncKeyState here because the keyboard-suppression hook
-    // returns 0 for everything while the menu is up.
-    const bool capturing = opendojo::config::is_capturing();
-    if (!capturing) {
-        if (ImGui::Button("Rebind...", ImVec2(0, 0))) { opendojo::config::start_capture(); }
-        ImGui::SameLine();
-        if (ImGui::Button("Reset to F12", ImVec2(0, 0))) {
-            opendojo::config::set_toggle_vk(VK_F12);
-            show_toast("Toggle key reset to F12");
-        }
-    } else {
-        ImGui::TextColored(ImVec4(1, 0.85f, 0.4f, 1), "Press any key... (Esc cancels)");
-        // The WndProc subclass captures the next WM_KEYDOWN VK into
-        // a shared atomic; we just check / consume it here.
-        auto pressed = opendojo::config::consume_captured_vk();
-        if (pressed != 0) {
-            opendojo::config::set_toggle_vk(pressed);
-            show_toast(std::string("Toggle key bound to ") + vk_name(pressed));
-        }
-    }
-
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
-
-    ImGui::TextUnformatted("Controller toggle chord");
-    ImGui::Spacing();
-
     const auto pad_btn = opendojo::config::toggle_pad_btn();
-    ImGui::Text("Current binding: ");
-    ImGui::SameLine();
-    ImGui::TextColored(ImVec4(0.55f, 0.95f, 0.65f, 1), "Back + %s", pad_btn_name(pad_btn));
-
-    ImGui::Spacing();
-
+    const bool capturing = opendojo::config::is_capturing();
     const bool pad_capturing = opendojo::config::is_pad_capturing();
-    if (!pad_capturing) {
-        if (ImGui::Button("Rebind controller...", ImVec2(0, 0))) {
-            opendojo::config::start_pad_capture();
-        }
+
+    const ImGuiTableFlags bind_flags = ImGuiTableFlags_SizingStretchSame;
+    if (ImGui::BeginTable("binds", 2, bind_flags)) {
+        ImGui::TableNextRow();
+
+        // ---- Keyboard column -------------------------------------------
+        ImGui::TableSetColumnIndex(0);
+        ImGui::TextUnformatted("Keyboard");
+        ImGui::Text("Current: ");
         ImGui::SameLine();
-        if (ImGui::Button("Reset to Y", ImVec2(0, 0))) {
-            opendojo::config::set_toggle_pad_btn(0x8000);  // XINPUT_GAMEPAD_Y
-            show_toast("Controller chord reset to Back + Y");
+        ImGui::TextColored(ImVec4(0.55f, 0.95f, 0.65f, 1), "%s", vk_name(vk).c_str());
+        ImGui::Spacing();
+        if (!capturing) {
+            if (ImGui::Button("Rebind...##kbd")) { opendojo::config::start_capture(); }
+            ImGui::SameLine();
+            if (ImGui::Button("Reset##kbd")) {
+                opendojo::config::set_toggle_vk(VK_F12);
+                show_toast("Toggle key reset to F12");
+            }
+        } else {
+            ImGui::TextColored(ImVec4(1, 0.85f, 0.4f, 1), "Press any key... (Esc cancels)");
+            auto pressed = opendojo::config::consume_captured_vk();
+            if (pressed != 0) {
+                opendojo::config::set_toggle_vk(pressed);
+                show_toast(std::string("Toggle key bound to ") + vk_name(pressed));
+            }
         }
-    } else {
-        ImGui::TextColored(ImVec4(1, 0.85f, 0.4f, 1),
-                           "Press any controller button... (Back cancels)");
-        auto pressed_btn = opendojo::config::consume_captured_pad_btn();
-        if (pressed_btn != 0) {
-            opendojo::config::set_toggle_pad_btn(pressed_btn);
-            show_toast(std::string("Controller chord bound to Back + ") +
-                       pad_btn_name(pressed_btn));
+
+        // ---- Controller column -----------------------------------------
+        ImGui::TableSetColumnIndex(1);
+        ImGui::TextUnformatted("Controller");
+        ImGui::Text("Current: ");
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(0.55f, 0.95f, 0.65f, 1), "Back + %s", pad_btn_name(pad_btn));
+        ImGui::Spacing();
+        if (!pad_capturing) {
+            if (ImGui::Button("Rebind...##pad")) { opendojo::config::start_pad_capture(); }
+            ImGui::SameLine();
+            if (ImGui::Button("Reset##pad")) {
+                opendojo::config::set_toggle_pad_btn(0x8000);  // XINPUT_GAMEPAD_Y
+                show_toast("Controller chord reset to Back + Y");
+            }
+        } else {
+            ImGui::TextColored(ImVec4(1, 0.85f, 0.4f, 1), "Press any button... (Back cancels)");
+            auto pressed_btn = opendojo::config::consume_captured_pad_btn();
+            if (pressed_btn != 0) {
+                opendojo::config::set_toggle_pad_btn(pressed_btn);
+                show_toast(std::string("Controller chord bound to Back + ") +
+                           pad_btn_name(pressed_btn));
+            }
         }
+
+        ImGui::EndTable();
     }
 }
 
@@ -632,8 +611,9 @@ void draw() {
         void (*draw)();
     };
     const TabDef tabs[] = {
-        {"Drills", &draw_drills_tab}, {"Export", &draw_export_tab},
-        {"Status", &draw_status_tab}, {"Settings", &draw_settings_tab},
+        {"Drills", &draw_drills_tab},
+        {"Export", &draw_recordings_tab},
+        {"Settings", &draw_settings_tab},
         {"About", &draw_about_tab},
     };
     constexpr int kTabCount = static_cast<int>(sizeof(tabs) / sizeof(tabs[0]));

@@ -113,11 +113,4 @@ std::uint32_t movelist_move_id(std::size_t slot_idx);
 // slot" UI would have stored. Returns Ok on success.
 WriteStatus set_movelist(std::size_t slot_idx, std::uint32_t move_id);
 
-// One-shot diagnostic: log per-slot values from all three flag arrays
-// (+0x484, +0x504, +0x544 — both side-0 and side-1 entries for the +0x504
-// table) along with pool1 / pool2 event counts. Use this to confirm
-// which flags the game's natural record path writes vs which we set
-// ourselves.
-void dump_flag_state();
-
 }  // namespace opendojo::slot

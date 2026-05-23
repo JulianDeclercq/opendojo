@@ -5,6 +5,7 @@
 #include "log.hpp"
 #include "memory.hpp"
 #include "players.hpp"
+#include "practice_state.hpp"
 
 namespace {
 
@@ -47,7 +48,9 @@ std::uintptr_t opendojo::subsystems::lookup(std::uintptr_t key_offset) {
 }
 
 bool opendojo::subsystems::in_practice() {
-    return lookup(KEY_GAMEPLAY) != 0;
+    // Driven by the practice-controller ctor/dtor hooks in
+    // practice_state.cpp — a single atomic load, no polling.
+    return practice_state::is_active();
 }
 
 std::uintptr_t opendojo::subsystems::pool1() {

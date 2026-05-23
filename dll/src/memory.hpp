@@ -44,4 +44,13 @@ void write_bytes(std::uintptr_t addr, const void* src, std::size_t n);
 // fully trust (e.g. raw fields that might be stale / garbage).
 bool is_readable(std::uintptr_t addr, std::size_t n);
 
+// SEH-guarded reads. If the read AVs (e.g. the source pointer is
+// freed memory, which can happen mid-character-swap when the
+// GlobalPlayerHolder chain is in flux), `*out` is set to 0 and the
+// function returns false. Caller should treat false as "treat the
+// chain as unresolvable on this tick" — never as "value is 0".
+bool try_read_u64(std::uintptr_t addr, std::uint64_t* out);
+bool try_read_u32(std::uintptr_t addr, std::uint32_t* out);
+bool try_read_u8(std::uintptr_t addr, std::uint8_t* out);
+
 }  // namespace opendojo::memory

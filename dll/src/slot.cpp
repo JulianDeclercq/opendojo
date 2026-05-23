@@ -156,34 +156,4 @@ WriteStatus set_movelist(std::size_t slot_idx, std::uint32_t move_id) {
     return WriteStatus::Ok;
 }
 
-void dump_flag_state() {
-    auto gameplay = subsystems::lookup(subsystems::KEY_GAMEPLAY);
-    if (!gameplay) {
-        OPENDOJO_LOG("slot::dump_flag_state: gameplay subsystem unresolved");
-        return;
-    }
-    auto base = memory::polaris_base();
-    auto p1 = subsystems::pool1();
-    auto p2 = subsystems::pool2();
-    auto recording = subsystems::lookup(subsystems::KEY_RECORDING);
-    auto human_side = memory::read_u8(gameplay + 0x47C);
-    OPENDOJO_LOG("slot::dump_flag_state: gameplay=0x%llX pool1=0x%llX rec=0x%llX side=%u",
-                 static_cast<unsigned long long>(gameplay), static_cast<unsigned long long>(p1),
-                 static_cast<unsigned long long>(recording), static_cast<unsigned>(human_side));
-    (void)p2;
-    (void)base;
-
-    // Per-slot status: flag value at +0x484 + (slot + side*8)*8 +
-    // pool1 event count + movelist move ID. These are the three pieces
-    // of state OpenDojo actually consumes.
-    for (std::size_t i = 0; i < USER_SLOTS; ++i) {
-        auto flag = memory::read_u32(gameplay + GAMEPLAY_SLOT_BASE + i * GAMEPLAY_SLOT_STRIDE +
-                                     GAMEPLAY_SLOT_FLAG);
-        std::uint16_t p1_evt = p1 ? memory::read_u16(p1 + i * SLOT_PITCH) : 0;
-        std::uint32_t move_id = movelist_move_id(i);
-        OPENDOJO_LOG("  slot %zu: flag=%u (%s)  p1_events=%u  movelist_id=0x%X", i, flag,
-                     kind_name(kind(i)), static_cast<unsigned>(p1_evt), move_id);
-    }
-}
-
 }  // namespace opendojo::slot
