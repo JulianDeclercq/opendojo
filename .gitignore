@@ -74,3 +74,4 @@ dll/target/
 # Node deps (lockfile is committed, deps are not)
 node_modules/
 cloudflare/opendojo-api/dist/
+.vite/

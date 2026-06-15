@@ -5,19 +5,10 @@
 <title>OpenDojo Cloud — admin</title>
 <style>
 /*
- * Self-contained admin panel. Hits Supabase REST endpoints directly
- * with the project's secret key (sb_secret_…) — that key is full
- * read/write on the database, so this UI is exclusively for the project owner.
+ * Admin panel for the project owner. Talks to Supabase REST with the
+ * project's secret key (sb_secret_…) — full read/write on the database.
  *
- * Open this file in a browser. Most browsers permit fetch() from
- * file:// to https origins; if yours blocks it, run a local server:
- *   python -m http.server 8765
- * ...then open http://localhost:8765/index.html.
  *
- * The URL + secret key are held in sessionStorage so a reload
- * doesn't kick you out — they vanish when you close the tab. Never
- * persisted to localStorage; never sent anywhere except to your
- * own Supabase project over HTTPS.
  */
 :root {
     --bg:         #15151a;
@@ -353,13 +344,15 @@ svg.timeseries {
     <!-- ===================== CONFIG ===================== -->
     <section id="config-section">
         <h2>Connect</h2>
-        <p>
-            Paste your Supabase URL + <code>secret</code> key (<code>sb_secret_…</code>).
-            Both stay in this tab's <code>sessionStorage</code> only — closing the tab
-            wipes them. The secret key has full DB access; do not share or check it in anywhere.
+        <p id="cfg-help">
+            Served via the local Vite proxy — it holds the secret key and forwards
+            requests to Supabase. Just click <b>Connect</b>. Leave the key blank if
+            you started the proxy with <code>SB_SECRET_KEY</code> set; otherwise paste
+            it below and the proxy will relay it. Values stay in this tab's
+            <code>sessionStorage</code> only.
         </p>
         <div class="card">
-            <div class="row">
+            <div class="row" id="cfg-url-row">
                 <div class="col" style="flex: 1;">
                     <label>Supabase URL</label>
                     <input id="cfg-url" type="text" placeholder="https://<ref>.supabase.co">
@@ -367,7 +360,7 @@ svg.timeseries {
             </div>
             <div class="row">
                 <div class="col" style="flex: 1;">
-                    <label>Secret key</label>
+                    <label>Secret key <span style="color:var(--dim)">(optional in proxy mode)</span></label>
                     <input id="cfg-key" type="password" placeholder="sb_secret_...">
                 </div>
             </div>
@@ -467,6 +460,7 @@ svg.timeseries {
                     <tr>
                         <th><input type="checkbox" id="drills-select-all"> Name</th>
                         <th>Character</th>
+                        <th>Tags / Difficulty</th>
                         <th>Status</th>
                         <th>Reports</th>
                         <th>Author</th>
@@ -628,7 +622,11 @@ svg.timeseries {
 // ====================================================================
 const SS_URL = 'opendojo_admin_url';
 const SS_KEY = 'opendojo_admin_key';
-let baseUrl = sessionStorage.getItem(SS_URL) || '';
+// Served over http(s) (the bundled Vite proxy) → proxy mode: talk to the same
+// origin and let the proxy inject the secret key server-side. Opened from
+// file:// there's no proxy, so fall back to hitting Supabase directly.
+const PROXY_MODE = location.protocol !== 'file:';
+let baseUrl = PROXY_MODE ? location.origin : (sessionStorage.getItem(SS_URL) || '');
 let svcKey  = sessionStorage.getItem(SS_KEY) || '';
 
 const PAGE_SIZE = 50;
@@ -694,7 +692,7 @@ async function supaCount(path) {
 // Connect flow.
 // ====================================================================
 async function tryConnect() {
-    if (!baseUrl || !svcKey) {
+    if (!baseUrl || (!PROXY_MODE && !svcKey)) {
         setStatus('disconnected', 'bad');
         return false;
     }
@@ -714,9 +712,13 @@ async function tryConnect() {
 }
 
 document.getElementById('cfg-connect').addEventListener('click', async () => {
-    baseUrl = document.getElementById('cfg-url').value.trim().replace(/\/$/, '');
+    // Proxy mode: always target the proxy origin; the key is optional (the
+    // proxy supplies it, or relays one pasted here). Direct mode: need both.
+    baseUrl = PROXY_MODE
+        ? location.origin
+        : document.getElementById('cfg-url').value.trim().replace(/\/$/, '');
     svcKey = document.getElementById('cfg-key').value.trim();
-    if (!baseUrl || !svcKey) { toast('URL and key required', false); return; }
+    if (!baseUrl || (!PROXY_MODE && !svcKey)) { toast('URL and key required', false); return; }
     sessionStorage.setItem(SS_URL, baseUrl);
     sessionStorage.setItem(SS_KEY, svcKey);
     await tryConnect();
@@ -732,10 +734,15 @@ document.getElementById('cfg-clear').addEventListener('click', () => {
     document.getElementById('content-section').style.display = 'none';
 });
 
-// Restore cached creds on first load.
-if (baseUrl) document.getElementById('cfg-url').value = baseUrl;
+// Restore cached creds on first load. In proxy mode the URL is fixed to the
+// proxy origin, so hide the URL field and auto-connect (key optional).
+if (PROXY_MODE) {
+    document.getElementById('cfg-url-row').style.display = 'none';
+} else if (baseUrl) {
+    document.getElementById('cfg-url').value = baseUrl;
+}
 if (svcKey)  document.getElementById('cfg-key').value = svcKey;
-if (baseUrl && svcKey) tryConnect();
+if (baseUrl && (PROXY_MODE || svcKey)) tryConnect();
 
 // ====================================================================
 // Dashboard tab: overview cards (admin_overview view), activity chart
@@ -931,7 +938,7 @@ async function refreshDrills() {
     const status = document.getElementById('drills-status').value;
     const search = document.getElementById('drills-search').value.trim();
     const sort   = document.getElementById('drills-sort').value;
-    let q = '/rest/v1/drills?select=id,name,description,character,cpu_side,status,uploader_id,author_handle,downloads,likes,reports,size_bytes,recordings_count,created_at';
+    let q = '/rest/v1/drills?select=id,name,description,character,cpu_side,status,uploader_id,author_handle,downloads,likes,reports,size_bytes,recordings_count,created_at,difficulty,categories';
     if (status !== 'any') q += `&status=eq.${status}`;
     if (search) {
         q += `&search_tsv=fts(simple).${encodeURIComponent(search + ':*')}`;
@@ -946,6 +953,31 @@ async function refreshDrills() {
     }
 }
 
+// Render the Tags / Difficulty cell. Also surfaces a red warning when a
+// nullable text column comes back as JSON null — these are exactly the fields
+// the DLL's parse_summary() reads with nlohmann value(), which THROWS on a
+// present-but-null key and strands the in-game browse tab on "loading". A row
+// flagged here is the one that hangs the mod menu for that character.
+const PARSE_NULL_FIELDS = ['description', 'cpu_side', 'difficulty'];
+function nullParseFields(d) {
+    return PARSE_NULL_FIELDS.filter(k => d[k] === null);
+}
+function tagsDifficultyCell(d) {
+    const RED = '#ff6b6b';
+    const diff = d.difficulty === null
+        ? `<span style="color:${RED}">null</span>`
+        : escapeHtml(d.difficulty || '—');
+    let tags;
+    if (Array.isArray(d.categories)) {
+        tags = d.categories.length ? d.categories.map(escapeHtml).join(', ')
+                                   : '<span style="color:var(--dim)">none</span>';
+    } else {
+        tags = `<span style="color:${RED}">null</span>`;
+    }
+    const bad = nullParseFields(d);
+    return `<div>${diff}</div><div style="font-size:12px;color:var(--dim);">${tags}</div>`;
+}
+
 function renderDrills(rows) {
     const tb = document.getElementById('drills-tbody');
     tb.innerHTML = '';
@@ -958,6 +990,7 @@ function renderDrills(rows) {
                 ${d.description ? `<div style="font-size:12px;color:var(--dim);">${escapeHtml(d.description.slice(0, 140))}${d.description.length > 140 ? '…' : ''}</div>` : ''}
             </td>
             <td>${escapeHtml(d.character)}${d.cpu_side ? ` <span style="color:var(--dim)">(${d.cpu_side})</span>` : ''}</td>
+            <td>${tagsDifficultyCell(d)}</td>
             <td><span class="badge ${d.status}">${d.status}</span></td>
             <td>
                 ${d.reports > 0

@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdio>
+#include <exception>
 #include <mutex>
 #include <set>
 #include <string>
@@ -19,6 +20,7 @@
 #include "cloud/worker.hpp"
 #include "commands.hpp"
 #include "hooks/render_hook.hpp"
+#include "log.hpp"
 #include "players.hpp"
 #include "ui/menu.hpp"
 
@@ -349,7 +351,16 @@ void kick_list() {
         g_browse.error.clear();
     }
     opendojo::cloud::worker::submit([q]() {
-        auto r = opendojo::cloud::api::list_drills(q);
+        opendojo::cloud::api::ListResult r;
+        try {
+            r = opendojo::cloud::api::list_drills(q);
+        } catch (const std::exception& e) {
+            // Never let a parse/throw leave the tab stuck on "loading": the
+            // worker would swallow the exception and we'd never clear the flag.
+            OPENDOJO_LOG("cloud_ui: list_drills threw: %s", e.what());
+            r.ok = false;
+            r.error_message = "Couldn't load drills. Please try again.";
+        }
         std::lock_guard lk(g_browse.mtx);
         g_browse.loading = false;
         if (r.ok) {

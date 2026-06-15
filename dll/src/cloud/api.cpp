@@ -6,6 +6,7 @@
 #include <cctype>
 #include <cstdio>
 #include <cstring>
+#include <exception>
 #include <sstream>
 #include <string>
 
@@ -19,6 +20,25 @@ namespace opendojo::cloud::api {
 namespace {
 
 using nlohmann::json;
+
+// nlohmann's json::value(key, default) returns the default only when the key
+// is ABSENT — a key that is present but JSON null throws type_error.302.
+// PostgREST sends nullable columns (description, cpu_side, difficulty, …) as
+// explicit null, so reading them with value() would throw and abort the whole
+// parse — stranding callers (e.g. the in-game browse tab) on a permanent
+// "loading". value_or treats null like absent, so one row with an empty
+// optional field can't sink the rest.
+template <typename T>
+T value_or(const json& row, const char* key, const T& fallback) {
+    auto it = row.find(key);
+    if (it == row.end() || it->is_null()) return fallback;
+    return it->get<T>();
+}
+// Overload so string-literal defaults deduce to std::string rather than
+// const char* (which json::get<> can't produce).
+inline std::string value_or(const json& row, const char* key, const char* fallback) {
+    return value_or<std::string>(row, key, std::string(fallback));
+}
 
 // Standard request headers: access key + user JWT bearer + JSON content
 // type. Auth must already be valid when this is called.
@@ -131,20 +151,23 @@ FailureInfo classify_http_failure(const opendojo::cloud::http::Response& res, co
 
 DrillSummary parse_summary(const json& row) {
     DrillSummary s;
+    // Required (NOT NULL) columns: read strictly. A missing/null value here
+    // means the row is genuinely malformed, so let it throw — the caller's
+    // per-row try/catch skips just that row and keeps the rest of the list.
     s.id = row.value("id", "");
     s.name = row.value("name", "");
-    s.description = row.value("description", "");
     s.character = row.value("character", "");
-    s.cpu_side = row.value("cpu_side", "");
     s.recordings_count = row.value("recordings_count", 0);
     s.size_bytes = row.value("size_bytes", static_cast<std::int64_t>(0));
     s.downloads = row.value("downloads", static_cast<std::int64_t>(0));
     s.likes = row.value("likes", static_cast<std::int64_t>(0));
     s.author_handle = row.value("author_handle", "");
-    s.difficulty = row.value("difficulty", "");
     s.created_at = row.value("created_at", "");
-    s.is_mine = row.value("is_mine", false);
-    s.is_liked = row.value("liked_by_me", false);
+    s.description = value_or(row, "description", "");
+    s.cpu_side = value_or(row, "cpu_side", "");
+    s.difficulty = value_or(row, "difficulty", "");
+    s.is_mine = value_or(row, "is_mine", false);
+    s.is_liked = value_or(row, "liked_by_me", false);
     // categories is a Postgres text[] coming through PostgREST as a
     // JSON array. Missing or non-array => empty list.
     if (row.contains("categories") && row["categories"].is_array()) {
@@ -216,8 +239,22 @@ ListResult list_drills(const ListQuery& q) {
         return out;
     }
     out.drills.reserve(j.size());
-    for (const auto& row : j)
-        out.drills.push_back(parse_summary(row));
+    int skipped = 0;
+    for (const auto& row : j) {
+        // Parse each row independently: a single malformed entry is hidden
+        // rather than failing the whole list, so valid drills always load.
+        // (Empty optional fields — difficulty, description, categories, … —
+        // are handled by value_or and never land here.)
+        try {
+            out.drills.push_back(parse_summary(row));
+        } catch (const std::exception& e) {
+            ++skipped;
+            OPENDOJO_LOG("cloud/api: skipped unparseable drill row: %s", e.what());
+        }
+    }
+    if (skipped)
+        OPENDOJO_LOG("cloud/api: list_drills skipped %d of %d rows", skipped,
+                     static_cast<int>(j.size()));
     out.ok = true;
     return out;
 }
@@ -247,6 +284,8 @@ GetResult get_drill(const std::string& id) {
         return out;
     }
     const auto& row = j[0];
+    // All columns get_drill reads are NOT NULL in the schema, so strict reads
+    // are correct — a null here would be a real server-side error.
     out.drill.id = row.value("id", "");
     out.drill.name = row.value("name", "");
     out.drill.character = row.value("character", "");
