@@ -28,6 +28,7 @@ extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg
 #include "autosave.hpp"
 #include "config.hpp"
 #include "log.hpp"
+#include "practice_rename.hpp"
 #include "subsystems.hpp"
 #include "ui/menu.hpp"
 #include "ui/theme.hpp"
@@ -1007,6 +1008,9 @@ HRESULT STDMETHODCALLTYPE hook_present(IDXGISwapChain* self, UINT sync_interval,
     // menu is visible. See the XInput section comment for the full
     // rationale.
     opendojo::autosave::tick();
+    // Rename the practice-menu "CPU Opponent Action N" rows in place. Cheap
+    // after the first capture (event-driven re-apply via a SetTextID patch).
+    opendojo::practice_rename::tick();
 
     if (!g_menu_visible.load()) {
         return g_present_orig(self, sync_interval, flags);
