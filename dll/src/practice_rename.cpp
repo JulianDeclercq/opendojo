@@ -12,6 +12,7 @@
 
 #include "log.hpp"
 #include "memory.hpp"
+#include "slot.hpp"
 #include "slot_labels.hpp"
 
 // =============================================================================
@@ -815,8 +816,15 @@ void scan_and_apply_rows() {
 
         // Slot N's custom name (from the loaded drill). Empty => leave the
         // original game label untouched.
-        std::string name = slot_labels::get(static_cast<std::size_t>(row_n - 1));
+        std::size_t slot = static_cast<std::size_t>(row_n - 1);
+        std::string name = slot_labels::get(slot);
         if (name.empty()) continue;
+        // Slot cleared in-game ("Not Set") -> drop the custom label so the
+        // row reverts to its original "CPU Opponent Action N" text.
+        if (!opendojo::slot::is_populated(slot)) {
+            slot_labels::set(slot, "");
+            continue;
+        }
         std::wstring repl = utf8_to_wide(name);
         if (repl.empty()) continue;
 
