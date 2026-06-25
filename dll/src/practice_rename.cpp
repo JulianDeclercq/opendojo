@@ -4,6 +4,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <string>
@@ -11,6 +12,7 @@
 
 #include "log.hpp"
 #include "memory.hpp"
+#include "slot_labels.hpp"
 
 // =============================================================================
 // PRACTICE-MENU ROW RENAME  ("CPU Opponent Action N" -> "OpenDojo Action N")
@@ -442,6 +444,15 @@ struct UE_FString {
     std::int32_t max  = 0;
 };
 
+std::wstring utf8_to_wide(const std::string& s) {
+    if (s.empty()) return {};
+    int n = MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), nullptr, 0);
+    if (n <= 0) return {};
+    std::wstring w(static_cast<std::size_t>(n), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), w.data(), n);
+    return w;
+}
+
 void make_fstring_leaky(UE_FString& out, const wchar_t* text) {
     if (!text) text = L"";
     std::size_t n = std::wcslen(text) + 1;
@@ -507,8 +518,7 @@ std::once_flag g_resolve_once;
 
 // Source prefix we rewrite, and the replacement prefix that takes its place.
 // The trailing remainder ("  N") of the original label is preserved verbatim.
-constexpr const char*    SRC_PREFIX  = "CPU Opponent Action";
-constexpr const wchar_t* DST_PREFIX  = L"OpenDojo Action";
+constexpr const char* SRC_PREFIX = "CPU Opponent Action";
 
 void do_resolve() {
     resolve_name_pool();
@@ -798,12 +808,17 @@ void scan_and_apply_rows() {
         if (!g_logged_sample)
             OPENDOJO_LOG("practice_rename: id=\"%s\" -> \"%s\"", id_buf, label_buf);
 
+        // Only the "CPU Opponent Action N" rows map to recording slots.
         if (std::strncmp(label_buf, SRC_PREFIX, plen) != 0) continue;
+        int row_n = std::atoi(label_buf + plen);  // " 5" -> 5
+        if (row_n < 1 || row_n > static_cast<int>(slot_labels::COUNT)) continue;
 
-        // Replacement = DST_PREFIX + the resolved remainder (e.g. " 5").
-        std::wstring repl = DST_PREFIX;
-        for (const char* p = label_buf + plen; *p; ++p)
-            repl.push_back(static_cast<wchar_t>(static_cast<unsigned char>(*p)));
+        // Slot N's custom name (from the loaded drill). Empty => leave the
+        // original game label untouched.
+        std::string name = slot_labels::get(static_cast<std::size_t>(row_n - 1));
+        if (name.empty()) continue;
+        std::wstring repl = utf8_to_wide(name);
+        if (repl.empty()) continue;
 
         std::uint64_t tb_off = 0, tb_on = 0;
         seh_read_u64(raddr + g_r.off_tb_menu_off, &tb_off);

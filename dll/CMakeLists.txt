@@ -134,6 +134,7 @@ add_library(opendojo SHARED
     src/practice_state.cpp
     src/signatures.cpp
     src/slot.cpp
+    src/slot_labels.cpp
     src/subsystems.cpp
     src/hooks/player_hook.cpp
     src/hooks/render_hook.cpp
