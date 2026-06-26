@@ -751,8 +751,7 @@ bool install_set_text_id_hook() {
 // Row scan — capture CPU-action rows and apply the rename.
 // =============================================================================
 
-bool        g_logged_sample = false;  // one-shot: log first row's item.Text
-int         g_row_scan_countdown = 0;
+int g_row_scan_countdown = 0;
 
 void scan_and_apply_rows() {
     if (g_row_scan_countdown > 0) { --g_row_scan_countdown; return; }
@@ -782,21 +781,11 @@ void scan_and_apply_rows() {
     for (auto* row : rows) {
         auto raddr = reinterpret_cast<std::uintptr_t>(row);
         std::uint64_t item = 0;
-        if (!seh_read_u64(raddr + g_r.off_list_item, &item) || !item) {
-            static std::atomic<int> n{0};
-            if (n.fetch_add(1) < 4)
-                OPENDOJO_LOG("practice_rename: row 0x%p has null/unreadable list_item", row);
-            continue;
-        }
+        if (!seh_read_u64(raddr + g_r.off_list_item, &item) || !item) continue;
 
         // item.Text holds the Gryphon text-id (FString); resolve it.
         if (read_fstring_ascii(static_cast<std::uintptr_t>(item)
-                               + g_r.off_item_text, id_buf, sizeof(id_buf)) < 0) {
-            static std::atomic<int> m{0};
-            if (m.fetch_add(1) < 4)
-                OPENDOJO_LOG("practice_rename: item.Text unreadable on row 0x%p", row);
-            continue;
-        }
+                               + g_r.off_item_text, id_buf, sizeof(id_buf)) < 0) continue;
         wchar_t id_w[128];
         std::size_t k = 0;
         for (; id_buf[k] && k + 1 < 128; ++k)
@@ -805,9 +794,6 @@ void scan_and_apply_rows() {
 
         auto ln = call_get_string(id_w, label_buf, sizeof(label_buf));
         if (ln < 0) continue;
-
-        if (!g_logged_sample)
-            OPENDOJO_LOG("practice_rename: id=\"%s\" -> \"%s\"", id_buf, label_buf);
 
         // Only the "CPU Opponent Action N" rows map to recording slots.
         if (std::strncmp(label_buf, SRC_PREFIX, plen) != 0) continue;
@@ -835,18 +821,6 @@ void scan_and_apply_rows() {
         if (tb_on)  fresh.push_back({reinterpret_cast<void*>(tb_on),  repl});
     }
 
-    g_logged_sample = true;  // dumped every row's id->label once
-
-    // Log scan outcome for the first several passes (then go quiet) so a
-    // zero-match result (e.g. item.Text holding a text-id, not the display
-    // string) is visible without spamming the log forever.
-    {
-        static std::atomic<int> logged{0};
-        if (logged.fetch_add(1) < 6)
-            OPENDOJO_LOG("practice_rename: scan rows=%zu matched_tbs=%zu",
-                         rows.size(), fresh.size());
-    }
-
     if (fresh.empty()) return;
 
     // Publish the capture list for the SetTextID shim, then apply now so the
@@ -865,40 +839,6 @@ void scan_and_apply_rows() {
         OPENDOJO_LOG("practice_rename: applied rename to %zu text blocks", applied);
 }
 
-// One-shot: enumerate live UUserWidget instances and log distinct class names
-// containing "Practice" with counts. Used to identify which widget class backs
-// the right-panel option rows (the "CPU Opponent Action N" rows live on a
-// sibling of WBP_UI_PracticeMenu_Button_1_C).
-void discover_practice_classes() {
-    static bool done = false;
-    if (done) return;
-    auto all = find_all_live_objects_of_class(
-        g_r.find_objects_of_class, g_r.cls_user_widget);
-    if (all.empty()) return;
-
-    struct Row { char name[96]; int count; };
-    std::vector<Row> seen;
-    char nb[96];
-    for (auto* obj : all) {
-        std::uint64_t cls = 0;
-        if (!seh_read_u64(reinterpret_cast<std::uintptr_t>(obj) + UOBJECT_CLASS_OFF, &cls) || !cls)
-            continue;
-        std::uint32_t idx = 0;
-        if (!seh_read_u32(static_cast<std::uintptr_t>(cls) + UOBJECT_NAME_OFF, &idx)) continue;
-        if (!decode_fname(idx, nb, sizeof(nb))) continue;
-        if (!std::strstr(nb, "Practice")) continue;
-        bool found = false;
-        for (auto& r : seen) if (std::strcmp(r.name, nb) == 0) { ++r.count; found = true; break; }
-        if (!found && seen.size() < 64) {
-            Row r{}; std::strncpy(r.name, nb, sizeof(r.name) - 1); r.count = 1;
-            seen.push_back(r);
-        }
-    }
-    for (auto& r : seen)
-        OPENDOJO_LOG("practice_rename: DISCOVER class=%s count=%d", r.name, r.count);
-    done = true;
-}
-
 }  // anonymous namespace
 
 // =============================================================================
@@ -915,7 +855,6 @@ void tick() {
     }
 
     if (!g_set_text_id_hooked.load()) install_set_text_id_hook();
-    discover_practice_classes();
     scan_and_apply_rows();
 }
 
