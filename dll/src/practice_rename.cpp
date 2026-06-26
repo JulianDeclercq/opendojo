@@ -805,12 +805,13 @@ void scan_and_apply_rows() {
         std::size_t slot = static_cast<std::size_t>(row_n - 1);
         std::string name = slot_labels::get(slot);
         if (name.empty()) continue;
-        // Slot cleared in-game ("Not Set") -> drop the custom label so the
-        // row reverts to its original "CPU Opponent Action N" text.
-        if (!opendojo::slot::is_populated(slot)) {
-            slot_labels::set(slot, "");
-            continue;
-        }
+
+        // Skip un-populated slots, but never permanent-clear the stored name:
+        // a transient empty read during a scene rebuild would otherwise destroy
+        // the label for good. Skipping drops the slot from the rebuilt capture
+        // list (so the SetTextID shim stops re-stamping a genuinely-cleared
+        // row); the label re-applies on the next scan once the slot repopulates.
+        if (!opendojo::slot::is_populated(slot)) continue;
         std::wstring repl = utf8_to_wide(name);
         if (repl.empty()) continue;
 
@@ -821,10 +822,10 @@ void scan_and_apply_rows() {
         if (tb_on)  fresh.push_back({reinterpret_cast<void*>(tb_on),  repl});
     }
 
-    if (fresh.empty()) return;
-
-    // Publish the capture list for the SetTextID shim, then apply now so the
-    // rename shows without waiting for the next Gryphon resolve.
+    // Publish unconditionally (even when empty): a slot that became
+    // un-populated must fall out of g_caps so the shim stops re-stamping it.
+    // Apply now so the rename shows without waiting for the next Gryphon
+    // resolve.
     {
         std::lock_guard<std::mutex> lk(g_caps_mtx);
         g_caps.swap(fresh);
@@ -844,6 +845,24 @@ void scan_and_apply_rows() {
 // =============================================================================
 // Public API.
 // =============================================================================
+
+// Called on the not-in-practice -> in-practice edge (from render_hook, which
+// polls in_practice every frame). WBP_UI_PracticeMenu_Button_2_C is a Blueprint
+// UClass the engine reloads across a match (the old class is GC'd), and the
+// Gryphon CDO is likewise a per-session UObject. Our cached cls_button_row then
+// points at a dead class, find_all_live_objects returns 0 rows, and the rename
+// silently stops — surviving even a drill reload. Drop those cached pointers so
+// the lazy resolver re-finds them when the menu next goes live. FProperty
+// offsets are layout-stable across the reload, so they are kept.
+void on_practice_reentry() {
+    if (!g_r.engine_ok) return;  // nothing cached yet; first resolve handles it
+    g_r.cls_button_row = nullptr;
+    g_r.gryphon_cdo    = nullptr;
+    g_r.bp_full_ok     = false;
+    g_bp_scan_countdown = 0;     // re-resolve on the next tick, no throttle wait
+    OPENDOJO_LOG("practice_rename: practice re-entry — invalidated "
+                 "cls_button_row + gryphon_cdo for re-resolve");
+}
 
 void tick() {
     std::call_once(g_resolve_once, do_resolve);

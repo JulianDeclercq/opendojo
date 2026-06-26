@@ -988,6 +988,17 @@ HRESULT STDMETHODCALLTYPE hook_present(IDXGISwapChain* self, UINT sync_interval,
     // early-returns); the only heavy path (ImGui render) is further
     // gated on the menu being visible.
     const bool in_practice = opendojo::subsystems::in_practice();
+
+    // Detect the not-in-practice -> in-practice edge here (Present runs every
+    // frame, including during a match) and invalidate practice_rename's cached
+    // UObjects, which the engine reloads across a match. Doing this inside
+    // practice_rename::tick() can't work — tick only runs while in practice.
+    static bool s_prev_in_practice = false;
+    if (in_practice && !s_prev_in_practice) {
+        opendojo::practice_rename::on_practice_reentry();
+    }
+    s_prev_in_practice = in_practice;
+
     if (!in_practice) {
         // If the user left practice with the menu open, auto-close so we
         // don't keep drawing it on top of menus/replays.

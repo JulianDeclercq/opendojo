@@ -16,4 +16,9 @@ namespace opendojo::practice_rename {
 // menu rows are captured (event-driven re-apply via the SetTextID patch).
 void tick();
 
+// Call on the not-in-practice -> in-practice edge. Invalidates cached UObjects
+// (the practice-menu Blueprint class + Gryphon CDO) that the engine reloads
+// across a match, so the rename re-resolves instead of silently stopping.
+void on_practice_reentry();
+
 }  // namespace opendojo::practice_rename
