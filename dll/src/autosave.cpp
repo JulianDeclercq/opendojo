@@ -16,7 +16,6 @@
 #include "hooks/player_hook.hpp"
 #include "players.hpp"
 #include "slot.hpp"
-#include "slot_labels.hpp"
 #include "subsystems.hpp"
 
 namespace opendojo::autosave {
@@ -240,11 +239,6 @@ LoadResult try_load_once(std::string_view character) {
     auto path = autosave_path(character);
     std::error_code ec;
     if (!std::filesystem::exists(path, ec)) {
-        // No preset for this character — drop any labels left over from a
-        // previously-loaded drill so they don't bleed onto this character's
-        // manually-selected slots. (load_drill clears+sets labels itself when
-        // a file does exist.)
-        slot_labels::clear_all();
         OPENDOJO_LOG("autosave: no scratch drill for %s — fresh start",
                      std::string(character).c_str());
         return LoadResult::Ok;

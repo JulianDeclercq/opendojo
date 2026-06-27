@@ -27,8 +27,10 @@ extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg
 
 #include "autosave.hpp"
 #include "config.hpp"
+#include "hooks/player_hook.hpp"
 #include "log.hpp"
 #include "practice_rename.hpp"
+#include "slot_labels.hpp"
 #include "subsystems.hpp"
 #include "ui/menu.hpp"
 #include "ui/theme.hpp"
@@ -998,6 +1000,24 @@ HRESULT STDMETHODCALLTYPE hook_present(IDXGISwapChain* self, UINT sync_interval,
         opendojo::practice_rename::on_practice_reentry();
     }
     s_prev_in_practice = in_practice;
+
+    // Drop custom slot labels when the CPU character changes to a *different*
+    // one. Labels are set by load_drill (manual preset load or autoload) and
+    // belong to whatever character was loaded; without this they'd bleed onto
+    // the next character's manually-selected slots when no new drill is loaded.
+    // Compare non-zero ids only: the detour briefly reports id 0 mid-swap, and
+    // a quickmatch return re-detects the SAME id (no change) so its labels are
+    // kept. The next load_drill re-clears+sets, so clearing here is safe.
+    static std::uint32_t s_prev_cpu_id = 0;
+    auto cpu = opendojo::player_hook::current_cpu();
+    if (in_practice && cpu.detected && cpu.cpu_character_id != 0) {
+        if (s_prev_cpu_id != 0 && cpu.cpu_character_id != s_prev_cpu_id) {
+            opendojo::slot_labels::clear_all();
+            OPENDOJO_LOG("render_hook: CPU character %u -> %u — cleared slot labels", s_prev_cpu_id,
+                         cpu.cpu_character_id);
+        }
+        s_prev_cpu_id = cpu.cpu_character_id;
+    }
 
     if (!in_practice) {
         // If the user left practice with the menu open, auto-close so we
