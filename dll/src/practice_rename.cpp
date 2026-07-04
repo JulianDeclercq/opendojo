@@ -14,6 +14,7 @@
 #include "memory.hpp"
 #include "slot.hpp"
 #include "slot_labels.hpp"
+#include "subsystems.hpp"
 
 // =============================================================================
 // PRACTICE-MENU ROW RENAME  ("CPU Opponent Action N" -> "OpenDojo Action N")
@@ -724,6 +725,11 @@ std::atomic<bool> g_set_text_id_hooked{false};
 
 void set_text_id_shim(void* self, void* frame, void* result) {
     if (g_set_text_id_orig) g_set_text_id_orig(self, frame, result);
+    // The Func patch is global and permanent, but captures only make sense
+    // inside practice: outside it any surviving pointer is dangling and can
+    // alias a recycled text block (rematch screen), stamping a slot label
+    // onto an unrelated widget.
+    if (!opendojo::subsystems::in_practice()) return;
     // After the original Gryphon resolve runs, restore our label for any
     // captured text block.
     std::wstring repl;
@@ -889,6 +895,18 @@ void on_practice_reentry() {
     OPENDOJO_LOG(
         "practice_rename: practice re-entry — invalidated "
         "cls_button_row + gryphon_cdo for re-resolve");
+}
+
+// Called on the in-practice -> not-in-practice edge (from render_hook).
+// The captured text blocks are about to be (or already are) GC'd; keeping
+// the pointers risks address-reuse matches in the SetTextID shim. Re-entry
+// rebuilds the list from live rows, so nothing is lost.
+void on_practice_exit() {
+    std::lock_guard<std::mutex> lk(g_caps_mtx);
+    if (!g_caps.empty()) {
+        g_caps.clear();
+        OPENDOJO_LOG("practice_rename: practice exit — cleared captured text blocks");
+    }
 }
 
 void tick() {

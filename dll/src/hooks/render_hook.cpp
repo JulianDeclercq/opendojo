@@ -998,6 +998,8 @@ HRESULT STDMETHODCALLTYPE hook_present(IDXGISwapChain* self, UINT sync_interval,
     static bool s_prev_in_practice = false;
     if (in_practice && !s_prev_in_practice) {
         opendojo::practice_rename::on_practice_reentry();
+    } else if (!in_practice && s_prev_in_practice) {
+        opendojo::practice_rename::on_practice_exit();
     }
     s_prev_in_practice = in_practice;
 

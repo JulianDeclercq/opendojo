@@ -21,4 +21,10 @@ void tick();
 // across a match, so the rename re-resolves instead of silently stopping.
 void on_practice_reentry();
 
+// Call on the in-practice -> not-in-practice edge. Drops the captured
+// text-block pointers: after practice the widgets are GC'd and the allocator
+// can reuse their addresses for unrelated text blocks (e.g. rematch-screen
+// entries), which the SetTextID shim would then stamp with slot labels.
+void on_practice_exit();
+
 }  // namespace opendojo::practice_rename
