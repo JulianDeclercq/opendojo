@@ -200,9 +200,11 @@ constexpr std::uint32_t RF_CLASS_DEFAULT_OBJECT = 0x10;
 constexpr std::uint32_t RF_ARCHETYPE_OBJECT = 0x20;
 
 // FNamePool. The base RVA moves between game patches (0x9955480 on v3.00.02,
-// 0x9962B00 on v3.01.01), so we resolve it at runtime with a self-check
-// rather than trusting a constant — see resolve_name_pool().
-constexpr std::uintptr_t FNAME_POOL_RVA_HINT = 0x9962B00;
+// 0x9962B00 on v3.01.01, 0x996B700 on the 2026-09-10 patch), so we resolve it
+// at runtime with a self-check rather than trusting a constant — see
+// resolve_name_pool(). The hint only saves the ~11MB .data scan; a stale hint
+// costs startup time on first rename, not correctness.
+constexpr std::uintptr_t FNAME_POOL_RVA_HINT = 0x996B700;
 constexpr std::ptrdiff_t POOL_BLOCKS_OFFSET = 0x10;
 constexpr std::uint32_t FNAME_BLOCK_MASK = 0x1FFF;
 constexpr std::uint32_t FNAME_STRIDE_MASK = 0xFFFF;
