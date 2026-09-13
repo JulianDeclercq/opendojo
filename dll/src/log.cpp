@@ -40,6 +40,20 @@ bool opendojo::log::init() {
     std::lock_guard guard(g_mutex);
     if (g_file) return true;
     auto path = log_path();
+
+    // Rotate the previous session to opendojo.log.1 before truncating.
+    // A crash is only diagnosable if the log that recorded it survives
+    // the relaunch, and the game is usually restarted before anyone
+    // thinks to save the file. One generation is enough — the crash and
+    // the run after it — and it keeps the directory from filling up.
+    // Both calls are best-effort: a missing log (first run) or a locked
+    // .1 (someone has it open in an editor) must not stop us logging.
+    std::error_code ec;
+    std::filesystem::path prev = path;
+    prev += L".1";
+    std::filesystem::remove(prev, ec);
+    std::filesystem::rename(path, prev, ec);
+
     // _wfsopen with _SH_DENYNO leaves the file readable & writable by
     // other processes while we're holding it open — without it the user
     // can't tail or even open the log while the game is running.
