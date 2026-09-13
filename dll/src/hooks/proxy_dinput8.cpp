@@ -58,6 +58,7 @@ using GetDeviceState_t = HRESULT(STDMETHODCALLTYPE*)(LPDIRECTINPUTDEVICE8, DWORD
 using GetDeviceData_t = HRESULT(STDMETHODCALLTYPE*)(LPDIRECTINPUTDEVICE8, DWORD,
                                                     LPDIDEVICEOBJECTDATA, LPDWORD, DWORD);
 
+DirectInput8Create_fn g_dic8_orig = nullptr;
 CreateDevice_t g_create_device_orig = nullptr;
 GetDeviceState_t g_get_state_orig = nullptr;
 GetDeviceData_t g_get_data_orig = nullptr;
@@ -145,6 +146,21 @@ void hook_dinput_instance(LPDIRECTINPUT8 di) {
     }
 }
 
+// Detour on the real dinput8!DirectInput8Create.
+//
+// OpenDojo ships as an Ultimate ASI Loader plugin (plugins/opendojo.asi), so
+// the game links against the loader's dinput8.dll and never calls our exported
+// forwarder below — without this detour we'd never see the IDirectInput8 the
+// keyboard suppression hangs off. Installed from the init thread rather than
+// DllMain: MH_EnableHook suspends threads, which deadlocks under the loader
+// lock.
+HRESULT WINAPI dinput8_create_hook(HINSTANCE h, DWORD v, REFIID r, LPVOID* p, LPUNKNOWN u) {
+    HRESULT hr = g_dic8_orig(h, v, r, p, u);
+    if (SUCCEEDED(hr) && p && *p) {
+        hook_dinput_instance(static_cast<LPDIRECTINPUT8>(*p));
+    }
+    return hr;
+}
 }  // namespace
 
 bool opendojo::proxy::load() {
@@ -179,6 +195,23 @@ bool opendojo::proxy::load() {
         return false;
     }
     return true;
+}
+
+void opendojo::proxy::install_dinput_hook() {
+    if (!p_DirectInput8Create) return;  // load() failed or wasn't called
+
+    if (!ensure_minhook()) return;
+
+    LPVOID target = reinterpret_cast<LPVOID>(p_DirectInput8Create);
+    if (MH_CreateHook(target, reinterpret_cast<LPVOID>(&dinput8_create_hook),
+                      reinterpret_cast<LPVOID*>(&g_dic8_orig)) == MH_OK &&
+        MH_EnableHook(target) == MH_OK) {
+        OPENDOJO_LOG("dinput: DirectInput8Create hook installed (target=%p)", target);
+    } else {
+        OPENDOJO_LOG(
+            "dinput: DirectInput8Create hook failed — menu keystrokes will leak "
+            "through to the game");
+    }
 }
 
 void opendojo::proxy::unload() {

@@ -261,23 +261,33 @@ endif()
 install(TARGETS opendojo RUNTIME DESTINATION ".")
 
 # ---------------------------------------------------------------------------
-# Post-build deploy: copy the freshly built DLL into the Tekken game folder
-# so `cmake --build` lands a working drop in one step. Skipped if the path
-# doesn't exist (e.g. on a clean checkout where Tekken isn't installed at
-# this exact path). Override with -DOPENDOJO_DEPLOY_DIR=... at configure time.
+# Post-build deploy: copy the freshly built DLL into Tekken's Ultimate ASI
+# Loader plugins folder as opendojo.asi (the loader only picks up *.asi; it
+# walks past a .dll). Override at configure time:
+#   cmake -B build -A x64 -DOPENDOJO_DEPLOY_DIR="<...>/Polaris/Binaries/Win64/plugins"
+# The folder is created if missing, but only when its parent (the game's Win64
+# dir) exists — so a machine without Tekken installed just skips the deploy.
 #
 # If Tekken is running, the copy will fail and so will the build — that's
 # the intended signal to "close the game before redeploying."
 # ---------------------------------------------------------------------------
 set(OPENDOJO_DEPLOY_DIR
-    "E:/Steam/steamapps/common/TEKKEN 8/Polaris/Binaries/Win64"
-    CACHE PATH "Tekken 8 install dir to copy the built DLL into after each build")
+    "E:/Steam/steamapps/common/TEKKEN 8/Polaris/Binaries/Win64/plugins"
+    CACHE PATH
+    "Ultimate ASI Loader plugins dir to copy the built opendojo.asi into after each build")
 
-if(OPENDOJO_DEPLOY_DIR AND EXISTS "${OPENDOJO_DEPLOY_DIR}")
+set(OPENDOJO_DEPLOY_NAME "opendojo.asi")
+
+if(OPENDOJO_DEPLOY_DIR)
+    get_filename_component(OPENDOJO_DEPLOY_PARENT "${OPENDOJO_DEPLOY_DIR}" DIRECTORY)
+endif()
+
+if(OPENDOJO_DEPLOY_DIR AND EXISTS "${OPENDOJO_DEPLOY_PARENT}")
     add_custom_command(TARGET opendojo POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${OPENDOJO_DEPLOY_DIR}"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "$<TARGET_FILE:opendojo>"
-            "${OPENDOJO_DEPLOY_DIR}/$<TARGET_FILE_NAME:opendojo>"
-        COMMENT "Deploying $<TARGET_FILE_NAME:opendojo> to ${OPENDOJO_DEPLOY_DIR}"
+            "${OPENDOJO_DEPLOY_DIR}/${OPENDOJO_DEPLOY_NAME}"
+        COMMENT "Deploying ${OPENDOJO_DEPLOY_NAME} to ${OPENDOJO_DEPLOY_DIR}"
         VERBATIM)
 endif()

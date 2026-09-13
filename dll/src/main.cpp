@@ -1,6 +1,9 @@
-// OpenDojo DLL entry point. Lives at <game>\Polaris\Binaries\Win64\dinput8.dll
-// (proxy name controlled by CMake's OPENDOJO_PROXY option). When the game
-// loads what it thinks is the system dinput8.dll, this DllMain runs first.
+// OpenDojo DLL entry point. Ships as
+// <game>\Polaris\Binaries\Win64\plugins\opendojo.asi, loaded by Ultimate ASI
+// Loader (which is the dinput8.dll sitting in Win64\ — don't overwrite it).
+// The binary still exports the dinput8 proxy surface (OPENDOJO_PROXY), so it
+// also works dropped in as dinput8.dll directly; under the ASI loader those
+// exports just go unused.
 //
 // Responsibilities:
 //   1. Resolve and pin the real dinput8.dll so our forwarded exports work.
@@ -35,6 +38,11 @@ void init_thread() {
     // compile definition — use it rather than a literal so the log line
     // can't drift from the real build version.
     OPENDOJO_LOG("OpenDojo v%s starting up", OPENDOJO_DLL_VERSION);
+
+    // First, before the ~100MB signature scan below: detour the real
+    // DirectInput8Create so we catch the game's IDirectInput8 no matter how
+    // early its input subsystem spins up.
+    opendojo::proxy::install_dinput_hook();
 
     auto base = opendojo::memory::polaris_base();
     if (!base) {

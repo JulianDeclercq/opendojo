@@ -13,6 +13,14 @@ namespace opendojo::proxy {
 // (otherwise the game crashes on the first forwarded call).
 bool load();
 
+// Detour the real dinput8!DirectInput8Create so the keyboard-suppression
+// chain gets installed even when OpenDojo is loaded as an ASI plugin rather
+// than as the dinput8.dll proxy itself (the game calls the ASI loader's
+// dinput8, not our exported forwarder). Call from the init thread, not
+// DllMain — MinHook suspends threads and would deadlock on the loader lock.
+// No-op if load() failed.
+void install_dinput_hook();
+
 // Call from DLL_PROCESS_DETACH. Safe to call even if load() failed.
 void unload();
 
